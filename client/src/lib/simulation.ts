@@ -1,4 +1,7 @@
 import { useState, useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { apiRequest } from './queryClient';
+import { useToast } from "@/hooks/use-toast";
 
 export type EventType = 'PROCESS' | 'FILE' | 'NETWORK' | 'DECISION';
 export type Severity = 'INFO' | 'WARNING' | 'CRITICAL' | 'SUCCESS';
@@ -13,68 +16,61 @@ export interface AgentEvent {
   metadata?: Record<string, any>;
 }
 
-const PROCESSES = ['python.exe', 'node', 'cargo', 'gopls', 'git'];
-const FILES = ['/src/main.py', '/src/utils.ts', '/config/agent.yaml', '/logs/debug.log', '.git/index'];
-const DECISIONS = ['Refactoring detected', 'Test failure analysis', 'Dependency injection', 'Commit message generation'];
+export interface AgentStatus {
+  running: boolean;
+  score: number;
+  ts: number;
+}
 
 export function useAgentSimulation() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [events, setEvents] = useState<AgentEvent[]>([]);
-  const [metrics, setMetrics] = useState({
-    confidence: 85,
-    cpuLoad: 12,
-    memoryUsage: 45,
-    activeAgents: 1
+
+  const { data: status } = useQuery<AgentStatus>({
+    queryKey: ['/api/agent/status'],
+    refetchInterval: 1000,
   });
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      // Randomly generate events
-      if (Math.random() > 0.6) {
-        const type = Math.random() > 0.5 ? 'FILE' : (Math.random() > 0.5 ? 'PROCESS' : 'DECISION');
-        let message = '';
-        let source = '';
-        let severity: Severity = 'INFO';
+  const startmutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest('POST', '/api/agent/start');
+    },
+    onSuccess: () => {
+      toast({ title: "Agent Started", description: "The agent companion is now observing." });
+      queryClient.invalidateQueries({ queryKey: ['/api/agent/status'] });
+    },
+    onError: (e) => {
+      toast({ title: "Failed to start", description: String(e), variant: "destructive" });
+    }
+  });
 
-        if (type === 'FILE') {
-          const file = FILES[Math.floor(Math.random() * FILES.length)];
-          message = `File modification detected: ${file}`;
-          source = 'FileSystemWatcher';
-          severity = 'INFO';
-        } else if (type === 'PROCESS') {
-          const proc = PROCESSES[Math.floor(Math.random() * PROCESSES.length)];
-          message = `High CPU usage detected on PID ${Math.floor(Math.random() * 9999)} (${proc})`;
-          source = 'ProcessMonitor';
-          severity = Math.random() > 0.8 ? 'WARNING' : 'INFO';
-        } else {
-          message = DECISIONS[Math.floor(Math.random() * DECISIONS.length)];
-          source = 'HeuristicEngine';
-          severity = 'SUCCESS';
-        }
+  const stopMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest('POST', '/api/agent/stop');
+    },
+    onSuccess: () => {
+      toast({ title: "Agent Stopped", description: "Observation halted." });
+      queryClient.invalidateQueries({ queryKey: ['/api/agent/status'] });
+    },
+    onError: (e) => {
+      toast({ title: "Failed to stop", description: String(e), variant: "destructive" });
+    }
+  });
 
-        const newEvent: AgentEvent = {
-          id: Math.random().toString(36).substr(2, 9),
-          timestamp: new Date().toISOString(),
-          type: type as EventType,
-          severity,
-          message,
-          source
-        };
+  // Transform status into metrics format expected by UI
+  const metrics = {
+    confidence: (status?.score || 0) * 100, // Assuming score is 0-1
+    cpuLoad: 0, // Not available in simple status yet, needing psutil in backend/CLI to expose more
+    memoryUsage: 0,
+    activeAgents: status?.running ? 1 : 0
+  };
 
-        setEvents(prev => [newEvent, ...prev].slice(0, 50));
-      }
-
-      // Update metrics slightly
-      setMetrics(prev => ({
-        ...prev,
-        confidence: Math.min(100, Math.max(0, prev.confidence + (Math.random() - 0.5) * 5)),
-        cpuLoad: Math.min(100, Math.max(0, prev.cpuLoad + (Math.random() - 0.5) * 10)),
-        memoryUsage: Math.min(100, Math.max(0, prev.memoryUsage + (Math.random() - 0.5) * 2)),
-      }));
-
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  return { events, metrics };
+  return {
+    events,
+    metrics,
+    isRunning: status?.running,
+    startAgent: startmutation.mutate,
+    stopAgent: stopMutation.mutate
+  };
 }

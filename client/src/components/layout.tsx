@@ -1,9 +1,9 @@
 import { Link, useLocation } from "wouter";
-import { 
-  LayoutDashboard, 
-  Settings, 
-  BrainCircuit, 
-  Activity, 
+import {
+  LayoutDashboard,
+  Settings,
+  BrainCircuit,
+  Activity,
   Terminal,
   Cpu
 } from "lucide-react";
@@ -33,14 +33,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
         <nav className="flex-1 p-4 space-y-2">
           {navItems.map((item) => (
-            <Link key={item.href} href={item.href}>
-              <a className={cn(
-                "flex items-center gap-3 px-3 py-2 text-sm transition-colors hover:text-primary hover:bg-white/5",
+            <Link
+              key={item.href}
+              href={item.href}
+              className={cn(
+                "flex items-center gap-3 px-3 py-2 text-sm transition-colors hover:text-primary hover:bg-white/5 cursor-pointer",
                 location === item.href ? "text-primary bg-primary/10 border-l-2 border-primary" : "text-muted-foreground border-l-2 border-transparent"
-              )}>
-                <item.icon className="h-4 w-4" />
-                {item.label}
-              </a>
+              )}
+            >
+              <item.icon className="h-4 w-4" />
+              {item.label}
             </Link>
           ))}
         </nav>

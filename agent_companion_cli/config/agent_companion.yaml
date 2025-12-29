@@ -1,5 +1,5 @@
 watch_paths:
-  - "~/projects"
+  - "/Users/nehatiwari/localcode/Agent-Observer"
 
 output_root: "~/agent_companion_data"
 poll_interval_seconds: 1.5

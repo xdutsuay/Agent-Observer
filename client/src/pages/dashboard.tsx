@@ -2,18 +2,17 @@ import { Layout } from "@/components/layout";
 import { useAgentSimulation, AgentEvent } from "@/lib/simulation";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Area, AreaChart, ResponsiveContainer, XAxis, YAxis, Tooltip } from "recharts";
-import { Activity, HardDrive, Cpu, Network } from "lucide-react";
+import { Activity, HardDrive, Cpu, Network, Play, Square, Power } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 export default function Dashboard() {
-  const { events, metrics } = useAgentSimulation();
+  const { events, metrics, isRunning, startAgent, stopAgent } = useAgentSimulation();
 
-  // Fake chart data
-  const chartData = events.map((e, i) => ({
-    name: i,
-    value: Math.random() * 100 + 50
-  })).reverse();
+  // Chart data currently empty as we don't have historical data from API yet
+  // We can eventually buffer the metrics.confidence in the hook if needed
+  const chartData: any[] = [];
 
   return (
     <Layout>
@@ -24,11 +23,23 @@ export default function Dashboard() {
             <p className="text-muted-foreground">Real-time observation of active workspaces.</p>
           </div>
           <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <Button
+                variant={isRunning ? "destructive" : "default"}
+                size="sm"
+                onClick={() => isRunning ? stopAgent() : startAgent()}
+                className="gap-2"
+              >
+                {isRunning ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                {isRunning ? "STOP OBSERVATION" : "START OBSERVATION"}
+              </Button>
+            </div>
+            <div className="h-10 w-[1px] bg-border" />
             <div className="flex flex-col items-end">
               <span className="text-xs text-primary font-bold">AGENT STATUS</span>
               <span className="text-sm text-white flex items-center gap-2">
-                <span className="h-2 w-2 bg-primary rounded-full animate-pulse" />
-                ACTIVE
+                <span className={`h-2 w-2 rounded-full ${isRunning ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+                {isRunning ? "ACTIVE" : "INACTIVE"}
               </span>
             </div>
             <div className="h-10 w-[1px] bg-border" />
@@ -41,32 +52,32 @@ export default function Dashboard() {
 
         {/* Metrics Grid */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <MetricCard 
-            title="CPU LOAD" 
-            value={`${metrics.cpuLoad.toFixed(0)}%`} 
-            icon={Cpu} 
-            trend="+2.4%" 
+          <MetricCard
+            title="CPU LOAD"
+            value={`${metrics.cpuLoad.toFixed(0)}%`}
+            icon={Cpu}
+            trend="+2.4%"
             color="text-primary"
           />
-          <MetricCard 
-            title="MEMORY" 
-            value={`${metrics.memoryUsage.toFixed(1)} GB`} 
-            icon={HardDrive} 
-            trend="-0.1%" 
+          <MetricCard
+            title="MEMORY"
+            value={`${metrics.memoryUsage.toFixed(1)} GB`}
+            icon={HardDrive}
+            trend="-0.1%"
             color="text-secondary"
           />
-          <MetricCard 
-            title="EVENTS/SEC" 
-            value="24" 
-            icon={Activity} 
-            trend="+12%" 
+          <MetricCard
+            title="EVENTS/SEC"
+            value="24"
+            icon={Activity}
+            trend="+12%"
             color="text-green-500"
           />
-          <MetricCard 
-            title="NETWORK" 
-            value="1.2 MB/s" 
-            icon={Network} 
-            trend="+5.5%" 
+          <MetricCard
+            title="NETWORK"
+            value="1.2 MB/s"
+            icon={Network}
+            trend="+5.5%"
             color="text-yellow-500"
           />
         </div>
@@ -82,22 +93,22 @@ export default function Dashboard() {
                 <AreaChart data={chartData}>
                   <defs>
                     <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="hsl(190 90% 50%)" stopOpacity={0.3}/>
-                      <stop offset="95%" stopColor="hsl(190 90% 50%)" stopOpacity={0}/>
+                      <stop offset="5%" stopColor="hsl(190 90% 50%)" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="hsl(190 90% 50%)" stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <XAxis dataKey="name" hide />
                   <YAxis hide />
-                  <Tooltip 
+                  <Tooltip
                     contentStyle={{ backgroundColor: '#09090b', borderColor: '#27272a', color: '#fff' }}
                     itemStyle={{ color: '#06b6d4' }}
                   />
-                  <Area 
-                    type="monotone" 
-                    dataKey="value" 
-                    stroke="hsl(190 90% 50%)" 
-                    fillOpacity={1} 
-                    fill="url(#colorValue)" 
+                  <Area
+                    type="monotone"
+                    dataKey="value"
+                    stroke="hsl(190 90% 50%)"
+                    fillOpacity={1}
+                    fill="url(#colorValue)"
                     isAnimationActive={false}
                   />
                 </AreaChart>
