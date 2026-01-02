@@ -1,7 +1,0 @@
-{
-  "process_name_contains": ["antigravity", "gravity"],
-  "child_process_contains": ["node", "python"],
-  "churn_window_seconds": 10,
-  "min_fs_events": 12,
-  "activation_threshold": 0.6
-}

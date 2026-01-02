@@ -1,7 +1,0 @@
-Metadata-Version: 2.4
-Name: agent-companion-cli
-Version: 0.1.0
-Requires-Python: >=3.10
-Requires-Dist: watchdog>=4.0.1
-Requires-Dist: psutil>=5.9.8
-Requires-Dist: pyyaml>=6.0.2

@@ -1,0 +1,15 @@
+[project]
+name = "agent-memory"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+dependencies = [
+  "fastapi>=0.95",
+  "uvicorn[standard]>=0.22",
+  "pydantic>=2.0",
+  "watchdog>=3.0",
+  "psutil>=5.9"
+]
+
+[project.scripts]
+agent-memory = "agent_memory_mcp.cli:entry"

@@ -18,8 +18,8 @@ export interface AgentEvent {
 
 export interface AgentStatus {
   running: boolean;
-  score: number;
-  ts: number;
+  data_root: string;
+  repos_count: number;
 }
 
 export function useAgentSimulation() {
@@ -28,17 +28,22 @@ export function useAgentSimulation() {
   const [events, setEvents] = useState<AgentEvent[]>([]);
 
   const { data: status } = useQuery<AgentStatus>({
-    queryKey: ['/api/agent/status'],
-    refetchInterval: 1000,
+    queryKey: ['/api/status'],
+    refetchInterval: 2000,
   });
 
-  const startmutation = useMutation({
+  const { data: reposData } = useQuery<{repos: Record<string, string>}>({
+    queryKey: ['/api/repos'],
+    refetchInterval: 5000,
+  });
+
+  const startMutation = useMutation({
     mutationFn: async () => {
-      await apiRequest('POST', '/api/agent/start');
+      await apiRequest('POST', '/api/watcher/start');
     },
     onSuccess: () => {
-      toast({ title: "Agent Started", description: "The agent companion is now observing." });
-      queryClient.invalidateQueries({ queryKey: ['/api/agent/status'] });
+      toast({ title: "Watcher Started", description: "The agent companion is now observing file changes." });
+      queryClient.invalidateQueries({ queryKey: ['/api/status'] });
     },
     onError: (e) => {
       toast({ title: "Failed to start", description: String(e), variant: "destructive" });
@@ -47,30 +52,31 @@ export function useAgentSimulation() {
 
   const stopMutation = useMutation({
     mutationFn: async () => {
-      await apiRequest('POST', '/api/agent/stop');
+      await apiRequest('POST', '/api/watcher/stop');
     },
     onSuccess: () => {
-      toast({ title: "Agent Stopped", description: "Observation halted." });
-      queryClient.invalidateQueries({ queryKey: ['/api/agent/status'] });
+      toast({ title: "Watcher Stopped", description: "Observation halted." });
+      queryClient.invalidateQueries({ queryKey: ['/api/status'] });
     },
     onError: (e) => {
       toast({ title: "Failed to stop", description: String(e), variant: "destructive" });
     }
   });
 
-  // Transform status into metrics format expected by UI
   const metrics = {
-    confidence: (status?.score || 0) * 100, // Assuming score is 0-1
-    cpuLoad: 0, // Not available in simple status yet, needing psutil in backend/CLI to expose more
+    confidence: status?.running ? 85 : 0,
+    cpuLoad: 0,
     memoryUsage: 0,
-    activeAgents: status?.running ? 1 : 0
+    activeAgents: status?.running ? 1 : 0,
+    reposCount: status?.repos_count || 0
   };
 
   return {
     events,
     metrics,
+    repos: reposData?.repos || {},
     isRunning: status?.running,
-    startAgent: startmutation.mutate,
-    stopAgent: stopMutation.mutate
+    startAgent: () => startMutation.mutate(),
+    stopAgent: () => stopMutation.mutate()
   };
 }
