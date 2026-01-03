@@ -2,101 +2,75 @@
 @import "tw-animate-css";
 
 @theme inline {
-  --color-background: hsl(240 10% 3.9%);
+  --color-background: hsl(240 10% 2%);
   --color-foreground: hsl(0 0% 98%);
   
-  --color-card: hsl(240 10% 5%);
+  --color-card: hsl(240 10% 4%);
   --color-card-foreground: hsl(0 0% 98%);
   
-  --color-popover: hsl(240 10% 3.9%);
+  --color-popover: hsl(240 10% 4%);
   --color-popover-foreground: hsl(0 0% 98%);
   
-  --color-primary: hsl(190 90% 50%);
+  --color-primary: hsl(190 100% 50%);
   --color-primary-foreground: hsl(240 5.9% 10%);
   
-  --color-secondary: hsl(320 70% 50%);
-  --color-secondary-foreground: hsl(0 0% 98%);
+  --color-secondary: hsl(280 100% 70%);
+  --color-secondary-foreground: hsl(0 0% 100%);
   
-  --color-muted: hsl(240 3.7% 15.9%);
-  --color-muted-foreground: hsl(240 5% 64.9%);
+  --color-accent: hsl(320 100% 60%);
+  --color-accent-foreground: hsl(0 0% 100%);
   
-  --color-accent: hsl(240 3.7% 15.9%);
-  --color-accent-foreground: hsl(0 0% 98%);
+  --color-muted: hsl(240 3.7% 12%);
+  --color-muted-foreground: hsl(240 5% 65%);
   
-  --color-destructive: hsl(0 62.8% 30.6%);
-  --color-destructive-foreground: hsl(0 0% 98%);
-  
-  --color-border: hsl(240 3.7% 15.9%);
-  --color-input: hsl(240 3.7% 15.9%);
-  --color-ring: hsl(240 4.9% 83.9%);
-  
-  --color-chart-1: hsl(190 90% 50%);
-  --color-chart-2: hsl(320 70% 50%);
-  --color-chart-3: hsl(142 70% 50%);
-  --color-chart-4: hsl(47 90% 50%);
-  --color-chart-5: hsl(262 80% 50%);
-  
-  --radius: 0rem;
-  --font-sans: 'Inter', sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
+  --color-border: hsl(240 3.7% 15%);
 }
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border;
   }
   body {
-    @apply bg-background text-foreground font-mono antialiased;
+    @apply bg-background text-foreground font-sans antialiased;
     background-image: 
-      linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
-      linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
-    background-size: 40px 40px;
+      radial-gradient(circle at 50% 50%, rgba(190, 0, 255, 0.05) 0%, transparent 50%),
+      radial-gradient(circle at 0% 0%, rgba(0, 212, 255, 0.05) 0%, transparent 50%);
+    background-attachment: fixed;
   }
 }
 
-/* Custom Scrollbar for that terminal feel */
+.glass-panel {
+  @apply bg-card/40 backdrop-blur-xl border border-white/5;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+}
+
+.neon-border {
+  @apply relative;
+}
+
+.neon-border::after {
+  content: '';
+  @apply absolute -inset-[1px] bg-gradient-to-r from-primary via-secondary to-accent opacity-20 blur-sm -z-10 rounded-inherit;
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: hsl(240 10% 5%);
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: hsl(240 3.7% 25%);
-  border-radius: 0px;
+  @apply bg-muted-foreground/20 rounded-full;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(190 90% 50%);
-}
-
-.animate-pulse-slow {
-  animation: pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-}
-
-@keyframes scanline {
-  0% {
-    transform: translateY(-100%);
-  }
-  100% {
-    transform: translateY(100%);
-  }
-}
-
-.scanline::after {
-  content: " ";
-  display: block;
-  position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  right: 0;
-  background: linear-gradient(
-    to bottom,
-    rgba(18, 16, 16, 0) 50%,
-    rgba(0, 0, 0, 0.25) 50%
-  );
-  background-size: 100% 4px;
-  z-index: 2;
-  pointer-events: none;
+  @apply bg-primary/40;
 }

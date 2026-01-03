@@ -38,9 +38,17 @@ class WatcherConfig(BaseModel):
     extensions: List[str]
     ignore_patterns: Optional[List[str]] = None
 
+@app.get("/")
+def root():
+    return {
+        "name": "Agent Memory MCP",
+        "status": "active",
+        "endpoints": ["/health", "/status", "/repos", "/memory/{repo_id}"]
+    }
+
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "timestamp": time.time()}
 
 @app.get("/repos")
 def list_repos():
@@ -102,11 +110,14 @@ def start_watcher(config: Optional[WatcherConfig] = None):
             if repo_id:
                 raw_path = store.capture_raw_log(repo_id, event)
                 # Auto-detect failure in log (very basic)
-                content = event.read_text(errors="ignore").lower()
-                if "error" in content or "failed" in content:
-                    store.append_memory(repo_id, "failures", f"Detected error in {event.name}", {"timestamp": time.ctime()})
-                else:
-                    store.append_memory(repo_id, "attempts", f"Detected activity in {event.name}", {"timestamp": time.ctime()})
+                try:
+                    content = event.read_text(errors="ignore").lower()
+                    if "error" in content or "failed" in content:
+                        store.append_memory(repo_id, "failures", f"Detected error in {event.name}", {"timestamp": time.ctime()})
+                    else:
+                        store.append_memory(repo_id, "attempts", f"Detected activity in {event.name}", {"timestamp": time.ctime()})
+                except Exception as e:
+                    print(f"Error reading {event}: {e}")
 
     watcher_thread = threading.Thread(target=watcher_loop, daemon=True)
     watcher_thread.start()
