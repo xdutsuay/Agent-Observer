@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 import time
 import threading
+import os
 
 from .storage import Storage
 from .watcher import FileWatcher
@@ -19,15 +20,20 @@ scorer = None
 watcher = None
 watcher_thread = None
 
-# Default config (can be moved to a file later)
+# Default config
 DEFAULT_CONFIG = {
     "watch_paths": [str(Path.home() / "localcode")],
-    "log_extensions": [".log", ".txt", ".md", ".py"],
-    "ignore_patterns": [".git", "node_modules", "__pycache__", ".venv"],
+    "log_extensions": [".log", ".txt", ".md", ".py", ".ts", ".tsx"],
+    "ignore_patterns": [".git", "node_modules", "__pycache__", ".venv", "dist", ".next"],
     "churn_window_seconds": 60,
     "min_fs_events": 5,
-    "process_name_contains": ["cursor", "vscode", "zed", "pycharm"]
+    "process_name_contains": ["cursor", "vscode", "zed", "pycharm", "python", "node"]
 }
+
+# Bootstrap: Resolve current directory if it's a repo
+current_repo_id = store.resolve_repo(os.getcwd())
+if current_repo_id:
+    print(f"[BOOTSTRAP] Resolved current workspace: {current_repo_id}")
 
 class TextPayload(BaseModel):
     text: str
@@ -52,7 +58,12 @@ def health():
 
 @app.get("/repos")
 def list_repos():
-    return {"repos": store.list_repos()}
+    repos = store.list_repos()
+    # If empty, try to resolve current dir again just in case
+    if not repos:
+        rid = store.resolve_repo(os.getcwd())
+        if rid: repos = store.list_repos()
+    return {"repos": repos}
 
 @app.get("/memory/{repo_id}")
 def get_memory(repo_id: str):
@@ -89,27 +100,21 @@ def start_watcher(config: Optional[WatcherConfig] = None):
         ignore_patterns=cfg.get("ignore_patterns", DEFAULT_CONFIG["ignore_patterns"])
     )
     
-    # Simple heuristics setup
     heuristics = {
         "churn_window_seconds": DEFAULT_CONFIG["churn_window_seconds"],
         "min_fs_events": DEFAULT_CONFIG["min_fs_events"],
         "process_name_contains": DEFAULT_CONFIG["process_name_contains"]
     }
     scorer = ActivityScorer(heuristics)
-    det = ProcessDetector(heuristics)
     
     def watcher_loop():
         watcher.start()
         print("[API] Watcher loop started")
         for event in watcher.events():
-            # Process event
             scorer.record_fs_event()
-            # In a real scenario, we'd also check process detector here
-            # and decide if we want to capture the log
             repo_id = store.resolve_repo(event)
             if repo_id:
-                raw_path = store.capture_raw_log(repo_id, event)
-                # Auto-detect failure in log (very basic)
+                store.capture_raw_log(repo_id, event)
                 try:
                     content = event.read_text(errors="ignore").lower()
                     if "error" in content or "failed" in content:
