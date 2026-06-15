@@ -39,7 +39,10 @@ def _utc_now() -> str:
 
 
 def _simple_embedding(text: str, dim: int = 64) -> List[float]:
-    """Deterministic bag-of-words style vector for local semantic-ish search."""
+    """Deterministic bag-of-words style vector (legacy fallback).
+
+    Prefer using EmbeddingProvider from engine.embeddings instead.
+    """
     vec = [0.0] * dim
     tokens = re.findall(r"[a-z0-9]{3,}", text.lower())
     if not tokens:
@@ -61,13 +64,14 @@ def _cosine(a: List[float], b: List[float]) -> float:
 
 
 class MemoryEngine:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, embedder: Optional[Any] = None):
         self.root = root.expanduser()
         self.root.mkdir(parents=True, exist_ok=True)
         self.db_path = self.root / "memory.db"
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.RLock()
+        self._embedder = embedder  # EmbeddingProvider or None (uses _simple_embedding)
         self._init_schema()
 
     def _init_schema(self) -> None:
@@ -235,7 +239,7 @@ class MemoryEngine:
                 (row["rowid"], content, kind_n, repo_id),
             )
 
-        emb = _simple_embedding(content)
+        emb = self._embed(content)
         self._conn.execute(
             "INSERT OR REPLACE INTO memory_embeddings (memory_id, embedding_json) VALUES (?, ?)",
             (mem_id, json.dumps(emb)),
@@ -336,7 +340,7 @@ class MemoryEngine:
             return self.list_memories(repo_id=repo_id, limit=limit)
 
         results: Dict[str, Dict[str, Any]] = {}
-        q_emb = _simple_embedding(query)
+        q_emb = self._embed(query)
 
         # FTS5 keyword search
         fts_query = " ".join(f'"{w}"' for w in query.split() if w)
@@ -505,6 +509,54 @@ class MemoryEngine:
             (repo_id,),
         ).fetchone()
         return int(row["total"]) if row else 0
+
+    def _embed(self, text: str) -> List[float]:
+        """Embed text using the configured provider, or fall back to _simple_embedding."""
+        if self._embedder is not None:
+            try:
+                return self._embedder.embed(text)
+            except Exception:
+                pass
+        return _simple_embedding(text)
+
+    def set_embedder(self, embedder: Any) -> None:
+        """Hot-swap the embedding provider."""
+        self._embedder = embedder
+
+    def reindex_embeddings(self, batch_size: int = 50) -> int:
+        """Re-embed all memories with the current provider. Returns count reindexed."""
+        if self._embedder is None:
+            return 0
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, content FROM memories WHERE deleted = 0"
+            ).fetchall()
+            count = 0
+            batch_ids: List[str] = []
+            batch_texts: List[str] = []
+            for row in rows:
+                batch_ids.append(row["id"])
+                batch_texts.append(row["content"])
+                if len(batch_texts) >= batch_size:
+                    self._reindex_batch(batch_ids, batch_texts)
+                    count += len(batch_ids)
+                    batch_ids, batch_texts = [], []
+            if batch_texts:
+                self._reindex_batch(batch_ids, batch_texts)
+                count += len(batch_ids)
+            return count
+
+    def _reindex_batch(self, ids: List[str], texts: List[str]) -> None:
+        try:
+            embeddings = self._embedder.embed_batch(texts)  # type: ignore[union-attr]
+        except Exception:
+            return
+        for mid, emb in zip(ids, embeddings):
+            self._conn.execute(
+                "INSERT OR REPLACE INTO memory_embeddings (memory_id, embedding_json) VALUES (?, ?)",
+                (mid, json.dumps(emb)),
+            )
+        self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()

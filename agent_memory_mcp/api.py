@@ -1,9 +1,10 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pathlib import Path
 from typing import List, Dict, Optional
+import asyncio
 import time
 import threading
 
@@ -15,6 +16,11 @@ from .metrics_collector import MetricsCollector
 from .log_parser import Severity, LogParser
 from .repo_discovery import default_watch_paths, discover_scan_paths, discover_git_repos
 from .llm_credentials import nvidia_configured
+from .project_registry import ProjectRegistry
+from .cross_repo import CrossRepoSearch
+from .correlator import MemoryCorrelator
+from .pattern_detector import PatternDetector
+from .ws import ws_manager, Event, EventType
 
 class TextPayload(BaseModel):
     text: str
@@ -285,6 +291,74 @@ def create_app(
     @app.get("/api/config")
     def get_config():
         return DEFAULT_CONFIG
+
+    # --- Phase 1.5: Multi-project intelligence ---
+    project_registry = ProjectRegistry(store)
+    cross_repo_search = CrossRepoSearch(store)
+
+    @app.get("/api/projects")
+    def list_projects():
+        return {"projects": project_registry.to_json()}
+
+    @app.get("/api/projects/{repo_id}")
+    def get_project(repo_id: str):
+        info = project_registry.get_project(repo_id)
+        if not info:
+            raise HTTPException(404, "Project not found")
+        from dataclasses import asdict
+        return asdict(info)
+
+    @app.post("/api/search/global")
+    def global_search(payload: SearchPayload):
+        return {"results": cross_repo_search.global_search(
+            payload.query, kinds=payload.kinds, limit=payload.limit
+        )}
+
+    @app.get("/api/hotspots")
+    def failure_hotspots():
+        return {"hotspots": cross_repo_search.failure_hotspots()}
+
+    # --- Phase 3: Pattern intelligence ---
+    mem_correlator = MemoryCorrelator(store.engine)
+    pattern_detect = PatternDetector(store.engine)
+
+    @app.get("/api/patterns/{repo_id}")
+    def get_pattern_report(repo_id: str):
+        return pattern_detect.get_report(repo_id)
+
+    @app.get("/api/patterns")
+    def get_global_patterns():
+        return pattern_detect.get_report()
+
+    @app.get("/api/related/{memory_id}")
+    def get_related_memories(memory_id: str, limit: int = 10):
+        return {"related": mem_correlator.get_related(memory_id, limit=limit)}
+
+    # --- Phase 2: WebSocket events ---
+    @app.websocket("/ws/events")
+    async def websocket_events(websocket: WebSocket):
+        await websocket.accept()
+        q = await ws_manager.connect()
+        try:
+            while True:
+                event: Event = await q.get()
+                await websocket.send_text(event.to_json())
+        except WebSocketDisconnect:
+            pass
+        finally:
+            await ws_manager.disconnect(q)
+
+    @app.get("/api/events/history")
+    def event_history(
+        since: Optional[float] = None,
+        event_types: Optional[str] = None,
+        repo_id: Optional[str] = None,
+        limit: int = 50,
+    ):
+        types_list = event_types.split(",") if event_types else None
+        return {"events": ws_manager.get_history(
+            since=since, event_types=types_list, repo_id=repo_id, limit=limit
+        )}
 
     ui_dist = Path(__file__).resolve().parent.parent / "ui" / "dist"
     if serve_ui and ui_dist.exists():

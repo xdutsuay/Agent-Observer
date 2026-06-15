@@ -17,7 +17,9 @@ dependencies = [
 
 [project.optional-dependencies]
 llm = ["openai>=1.0", "anthropic>=0.25"]
+embeddings = ["sentence-transformers>=2.2"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+all = ["openai>=1.0", "anthropic>=0.25", "sentence-transformers>=2.2"]
 
 [project.scripts]
 agent-memory = "agent_memory_mcp.cli:entry"
