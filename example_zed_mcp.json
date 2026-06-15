@@ -1,0 +1,15 @@
+{
+  "agent-memory": {
+    "command": "python",
+    "args": [
+      "-m",
+      "agent_memory_mcp.cli",
+      "serve",
+      "--mode",
+      "stdio",
+      "--root",
+      "/Users/you/agent_companion_data"
+    ],
+    "env": {}
+  }
+}

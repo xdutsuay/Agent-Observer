@@ -1,0 +1,59 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@theme inline {
+  --color-background: #0a0b0d;
+  --color-foreground: #ffffff;
+  
+  --color-card: #0d0f14;
+  --color-card-foreground: #ffffff;
+  
+  --color-popover: #0d0f14;
+  --color-popover-foreground: #ffffff;
+  
+  --color-primary: #00e5ff;
+  --color-primary-foreground: #000000;
+  
+  --color-secondary: #ff3d81;
+  --color-secondary-foreground: #ffffff;
+  
+  --color-muted: #1a1d23;
+  --color-muted-foreground: #8b949e;
+  
+  --color-border: #21262d;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-[#0a0b0d] text-white font-sans antialiased;
+  }
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+.sidebar-item {
+  @apply flex items-center gap-3 px-6 py-4 text-xs font-bold transition-all duration-200 border-l-4;
+}
+
+.sidebar-item-active {
+  @apply bg-[#161b22] border-primary text-white;
+}
+
+.sidebar-item-inactive {
+  @apply border-transparent text-[#8b949e] hover:text-white hover:bg-white/5;
+}
+
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-[#21262d] rounded-full;
+}

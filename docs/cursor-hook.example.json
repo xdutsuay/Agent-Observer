@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "hooks": {
+    "afterFileEdit": [
+      {
+        "command": "curl",
+        "args": [
+          "-s",
+          "-X", "POST",
+          "http://127.0.0.1:9000/api/memory/default/decisions",
+          "-H", "Content-Type: application/json",
+          "-d", "{\"text\":\"File edited: ${file}\",\"metadata\":{\"file\":\"${file}\"}}"
+        ]
+      }
+    ]
+  }
+}

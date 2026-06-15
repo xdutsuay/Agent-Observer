@@ -1,0 +1,36 @@
+.venv/
+# Python / Venv fallback folders
+/bin/
+/lib/
+/lib64/
+/include/
+/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+.venv
+venv/
+ENV/
+
+# Node/React
+node_modules/
+dist/
+.next/
+out/
+.vercel
+.env
+.env.local
+.env.*.local
+
+# Project Specific
+agent_companion_data/
+test_error.log
+*.log
+.DS_Store
+
+# Build artifacts
+*.egg-info/
+graphify-out/
+.pytest_cache/

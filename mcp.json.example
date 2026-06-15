@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "agent-memory": {
+      "command": "agent-memory",
+      "args": ["mcp", "--root", "~/agent_companion_data"],
+      "env": {
+        "AGENT_MEMORY_LLM_PROVIDER": "nvidia",
+        "AGENT_MEMORY_USE_HERMES_AUTH": "1"
+      }
+    }
+  }
+}
