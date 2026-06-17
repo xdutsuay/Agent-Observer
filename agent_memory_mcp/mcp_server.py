@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any
+
+from mcp.server.lowlevel.server import request_ctx
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -22,6 +25,7 @@ from .project_registry import ProjectRegistry
 from .cross_repo import CrossRepoSearch
 from .correlator import MemoryCorrelator
 from .pattern_detector import PatternDetector
+from .usage_log import UsageLog, classify_host_ide, infer_host_ide
 
 server = Server("agent-memory")
 _store: Storage | None = None
@@ -34,6 +38,26 @@ def _get_store(root: Path) -> Storage:
     if _store is None:
         _store = Storage(root)
     return _store
+
+
+def _mcp_client_context() -> tuple[str, str, str]:
+    """Client name, version, and inferred host IDE for the active MCP session."""
+    host = infer_host_ide()
+    try:
+        ctx = request_ctx.get()
+        params = ctx.session.client_params
+        if params and params.clientInfo:
+            name = params.clientInfo.name or "unknown"
+            version = params.clientInfo.version or ""
+            host = classify_host_ide(name) if classify_host_ide(name) != "Unknown" else host
+            return name, version, host
+    except LookupError:
+        pass
+    return "unknown", "", host
+
+
+def _text_from_contents(contents: list[TextContent]) -> str:
+    return "\n".join(getattr(c, "text", str(c)) for c in contents)
 
 
 def create_mcp_server(root: str | Path) -> Server:
@@ -237,8 +261,9 @@ def create_mcp_server(root: str | Path) -> Server:
             ),
         ]
 
-    @server.call_tool()
-    async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+    usage = UsageLog.for_root(root_path)
+
+    async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         if name == "remember" or name == "add_memory":
             path = arguments["path"]
             kind = arguments["kind"]
@@ -372,6 +397,33 @@ def create_mcp_server(root: str | Path) -> Server:
 
         raise ValueError(f"Unknown tool: {name}")
 
+    @server.call_tool()
+    async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+        client_name, client_version, host_ide = _mcp_client_context()
+        t0 = time.perf_counter()
+        ok = True
+        response_text = ""
+        try:
+            result = await _dispatch_tool(name, arguments)
+            response_text = _text_from_contents(result)
+            return result
+        except Exception as exc:
+            ok = False
+            response_text = str(exc)
+            raise
+        finally:
+            usage.record(
+                transport="mcp",
+                method=name,
+                query=arguments,
+                response_preview=response_text,
+                client_name=client_name,
+                client_version=client_version,
+                host_ide=host_ide,
+                duration_ms=(time.perf_counter() - t0) * 1000,
+                ok=ok,
+            )
+
     @server.list_prompts()
     async def list_prompts() -> list[Prompt]:
         return [
@@ -386,23 +438,45 @@ def create_mcp_server(root: str | Path) -> Server:
 
     @server.get_prompt()
     async def get_prompt(name: str, arguments: dict[str, str] | None) -> GetPromptResult:
-        if name != "inject_memory_context":
-            raise ValueError(f"Unknown prompt: {name}")
+        client_name, client_version, host_ide = _mcp_client_context()
+        t0 = time.perf_counter()
+        ok = True
+        response_text = ""
         args = arguments or {}
-        path = args.get("path", ".")
-        rid = store.resolve_repo(path)
-        ctx = store.get_repo_context(rid)
-        body = (
-            f"You are working on repo `{rid}`. Relevant memory:\n\n"
-            f"### Failures\n{ctx['failures']}\n\n"
-            f"### Decisions\n{ctx['decisions']}\n\n"
-            f"### Recent attempts\n{ctx['attempts']}\n\n"
-            f"### Facts\n{ctx.get('facts', '')}\n"
-        )
-        return GetPromptResult(
-            description=f"Memory context for {rid}",
-            messages=[PromptMessage(role="user", content=TextContent(type="text", text=body))],
-        )
+        try:
+            if name != "inject_memory_context":
+                raise ValueError(f"Unknown prompt: {name}")
+            path = args.get("path", ".")
+            rid = store.resolve_repo(path)
+            ctx = store.get_repo_context(rid)
+            body = (
+                f"You are working on repo `{rid}`. Relevant memory:\n\n"
+                f"### Failures\n{ctx['failures']}\n\n"
+                f"### Decisions\n{ctx['decisions']}\n\n"
+                f"### Recent attempts\n{ctx['attempts']}\n\n"
+                f"### Facts\n{ctx.get('facts', '')}\n"
+            )
+            response_text = body
+            return GetPromptResult(
+                description=f"Memory context for {rid}",
+                messages=[PromptMessage(role="user", content=TextContent(type="text", text=body))],
+            )
+        except Exception as exc:
+            ok = False
+            response_text = str(exc)
+            raise
+        finally:
+            usage.record(
+                transport="mcp",
+                method="inject_memory_context",
+                query=args,
+                response_preview=response_text,
+                client_name=client_name,
+                client_version=client_version,
+                host_ide=host_ide,
+                duration_ms=(time.perf_counter() - t0) * 1000,
+                ok=ok,
+            )
 
     return server
 

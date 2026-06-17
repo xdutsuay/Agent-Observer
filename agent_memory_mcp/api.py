@@ -1,6 +1,7 @@
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -21,6 +22,8 @@ from .cross_repo import CrossRepoSearch
 from .correlator import MemoryCorrelator
 from .pattern_detector import PatternDetector
 from .ws import ws_manager, Event, EventType
+from .usage_log import UsageLog, classify_host_ide
+from .disk_usage import build_disk_report
 
 class TextPayload(BaseModel):
     text: str
@@ -181,6 +184,35 @@ def create_app(
     store = Storage(data_root)
     metrics_collector = MetricsCollector(window_seconds=60)
     observer = AgentObserver(store, metrics_collector, DEFAULT_CONFIG.copy())
+    usage_log = UsageLog.for_root(data_root)
+
+    def _http_client(request: Request) -> tuple[str, str, str]:
+        ua = request.headers.get("user-agent", "Dashboard UI")
+        host = classify_host_ide(ua)
+        if host == "Unknown":
+            host = "Web UI"
+        return ua[:120], "", host
+
+    def _log_http(
+        request: Request,
+        method: str,
+        query: Dict,
+        response_preview: str,
+        duration_ms: float,
+        ok: bool = True,
+    ) -> None:
+        client_name, client_version, host_ide = _http_client(request)
+        usage_log.record(
+            transport="http",
+            method=method,
+            query=query,
+            response_preview=response_preview,
+            client_name=client_name,
+            client_version=client_version,
+            host_ide=host_ide,
+            duration_ms=duration_ms,
+            ok=ok,
+        )
 
     app = FastAPI(title="Agent Memory MCP", version="0.3.0")
     app.add_middleware(
@@ -207,8 +239,18 @@ def create_app(
         return {"repos": store.list_repos()}
 
     @app.get("/api/memory/{repo_id}")
-    def get_memory(repo_id: str):
-        return store.read_memory(repo_id)
+    def get_memory(repo_id: str, request: Request):
+        t0 = time.perf_counter()
+        data = store.read_memory(repo_id)
+        preview = "\n".join(f"{k}: {str(v)[:80]}" for k, v in list(data.items())[:4])
+        _log_http(
+            request,
+            "http_get_memory",
+            {"repo_id": repo_id},
+            preview,
+            (time.perf_counter() - t0) * 1000,
+        )
+        return data
 
     @app.get("/api/memories")
     def list_memory_records(
@@ -219,25 +261,45 @@ def create_app(
         return {"memories": store.list_memories(repo_id=repo_id, kind=kind, limit=limit)}
 
     @app.post("/api/search")
-    def search_memory(payload: SearchPayload):
-        return {"results": store.search(
+    def search_memory(payload: SearchPayload, request: Request):
+        t0 = time.perf_counter()
+        results = store.search(
             payload.query,
             repo_id=payload.repo_id,
             kinds=payload.kinds,
             limit=payload.limit,
-        )}
+        )
+        preview = f"{len(results)} hit(s)"
+        if results:
+            preview += f" — top: {results[0].get('content', '')[:120]}"
+        _log_http(
+            request,
+            "http_search",
+            payload.model_dump(),
+            preview,
+            (time.perf_counter() - t0) * 1000,
+        )
+        return {"results": results}
 
     @app.get("/api/failures/{repo_id}")
     def failure_signatures(repo_id: str):
         return {"signatures": store.engine.get_failure_signatures(repo_id)}
 
     @app.post("/api/memory/{repo_id}/{kind}")
-    def add_memory(repo_id: str, kind: str, payload: TextPayload):
+    def add_memory(repo_id: str, kind: str, payload: TextPayload, request: Request):
         allowed = ["attempts", "failures", "decisions", "facts", "preferences",
                    "attempt", "failure", "decision", "fact", "preference"]
         if kind not in allowed:
             raise HTTPException(status_code=400, detail="Invalid kind")
+        t0 = time.perf_counter()
         store.append_memory(repo_id, kind, payload.text, payload.metadata, source="http")
+        _log_http(
+            request,
+            "http_add_memory",
+            {"repo_id": repo_id, "kind": kind, "text": payload.text[:200]},
+            f"Stored {kind} in {repo_id}",
+            (time.perf_counter() - t0) * 1000,
+        )
         return {"ok": True}
 
     @app.get("/api/metrics")
@@ -292,6 +354,22 @@ def create_app(
     def get_config():
         return DEFAULT_CONFIG
 
+    @app.get("/api/usage/summary")
+    def usage_summary():
+        return usage_log.summary()
+
+    @app.get("/api/usage/sessions")
+    def usage_sessions(limit: int = 20):
+        return {"sessions": usage_log.list_sessions(limit=limit)}
+
+    @app.get("/api/usage/interactions")
+    def usage_interactions(limit: int = 50, host_ide: Optional[str] = None):
+        return {"interactions": usage_log.list_interactions(limit=limit, host_ide=host_ide)}
+
+    @app.get("/api/disk-usage")
+    def disk_usage(include_workspace: bool = True):
+        return build_disk_report(store, include_workspace=include_workspace)
+
     # --- Phase 1.5: Multi-project intelligence ---
     project_registry = ProjectRegistry(store)
     cross_repo_search = CrossRepoSearch(store)
@@ -309,10 +387,22 @@ def create_app(
         return asdict(info)
 
     @app.post("/api/search/global")
-    def global_search(payload: SearchPayload):
-        return {"results": cross_repo_search.global_search(
+    def global_search(payload: SearchPayload, request: Request):
+        t0 = time.perf_counter()
+        results = cross_repo_search.global_search(
             payload.query, kinds=payload.kinds, limit=payload.limit
-        )}
+        )
+        preview = f"{len(results)} cross-repo hit(s)"
+        if results:
+            preview += f" — {results[0].get('repo_id')}: {results[0].get('content', '')[:80]}"
+        _log_http(
+            request,
+            "http_global_search",
+            payload.model_dump(),
+            preview,
+            (time.perf_counter() - t0) * 1000,
+        )
+        return {"results": results}
 
     @app.get("/api/hotspots")
     def failure_hotspots():
@@ -362,7 +452,18 @@ def create_app(
 
     ui_dist = Path(__file__).resolve().parent.parent / "ui" / "dist"
     if serve_ui and ui_dist.exists():
-        app.mount("/", StaticFiles(directory=str(ui_dist), html=True), name="ui")
+        # Serve static assets
+        app.mount("/assets", StaticFiles(directory=str(ui_dist / "assets")), name="assets")
+
+        # SPA catch-all: serve index.html for any non-API route
+        @app.get("/{full_path:path}")
+        async def spa_fallback(request: Request, full_path: str):
+            # If it's a real file in dist, serve it
+            file_path = ui_dist / full_path
+            if full_path and file_path.exists() and file_path.is_file():
+                return FileResponse(str(file_path))
+            # Otherwise serve index.html for SPA routing
+            return FileResponse(str(ui_dist / "index.html"))
 
     return app
 
