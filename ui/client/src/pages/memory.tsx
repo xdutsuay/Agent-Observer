@@ -4,15 +4,22 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import {
   Database,
   ChevronRight,
   Search,
   BookOpen,
   AlertTriangle,
+  ThumbsUp,
+  ThumbsDown,
+  Sparkles,
+  RefreshCw,
+  Trash2,
+  Eye,
 } from "lucide-react";
 import { useAgentSimulation } from "@/lib/simulation";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -23,6 +30,10 @@ interface MemoryRecord {
   source: string;
   created_at: string;
   score?: number;
+  relevance_score?: number;
+  quality_tier?: string;
+  access_count?: number;
+  last_accessed?: string;
 }
 
 interface FailureSig {
@@ -32,10 +43,47 @@ interface FailureSig {
   resolved: number;
 }
 
+const tierColor = (tier?: string) => {
+  switch (tier) {
+    case "high": return "bg-green-500/10 text-green-400 border-green-500/20";
+    case "medium": return "bg-blue-500/10 text-blue-400 border-blue-500/20";
+    case "low": return "bg-yellow-500/10 text-yellow-400 border-yellow-500/20";
+    case "noise": return "bg-red-500/10 text-red-400 border-red-500/20";
+    default: return "bg-white/5 text-[#8b949e] border-[#21262d]";
+  }
+};
+
+const kindColor = (kind: string) => {
+  switch (kind) {
+    case "failure": return "text-red-400 border-red-400/30";
+    case "decision": return "text-blue-400 border-blue-400/30";
+    case "fact": return "text-green-400 border-green-400/30";
+    case "preference": return "text-purple-400 border-purple-400/30";
+    default: return "text-[#8b949e] border-[#21262d]";
+  }
+};
+
+const relevanceBar = (score: number) => {
+  const pct = Math.round(score * 100);
+  const color =
+    pct >= 60 ? "bg-green-500" :
+    pct >= 30 ? "bg-yellow-500" :
+    "bg-red-500/60";
+  return (
+    <div className="flex items-center gap-2">
+      <div className="w-16 h-1.5 bg-[#21262d] rounded-full overflow-hidden">
+        <div className={cn("h-full rounded-full transition-all", color)} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-[9px] text-[#8b949e] font-mono">{pct}%</span>
+    </div>
+  );
+};
+
 export default function Memory() {
   const { repos } = useAgentSimulation();
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
   const [searchQ, setSearchQ] = useState("");
+  const qc = useQueryClient();
 
   useEffect(() => {
     if (!selectedRepoId && repos.length > 0) {
@@ -74,10 +122,40 @@ export default function Memory() {
     },
   });
 
+  const feedbackMutation = useMutation({
+    mutationFn: async ({ memoryId, useful }: { memoryId: string; useful: boolean }) => {
+      const res = await apiRequest("POST", "/api/v1/feedback", {
+        memory_id: memoryId,
+        useful,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/memories", selectedRepoId] });
+    },
+  });
+
+  const refreshMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/v1/relevance/refresh?repo_id=${selectedRepoId}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/memories", selectedRepoId] });
+    },
+  });
+
   const memories = memoriesData?.memories || [];
   const searchResults: MemoryRecord[] = searchMutation.data?.results || [];
   const displayList = searchResults.length > 0 ? searchResults : memories;
   const signatures = (failuresData?.signatures || []).filter((s) => !s.resolved);
+
+  // Stats
+  const noiseCount = memories.filter((m) => m.quality_tier === "noise").length;
+  const avgRelevance = memories.length > 0
+    ? memories.reduce((s, m) => s + (m.relevance_score || 0), 0) / memories.length
+    : 0;
+  const totalAccesses = memories.reduce((s, m) => s + (m.access_count || 0), 0);
 
   return (
     <Layout>
@@ -92,11 +170,29 @@ export default function Memory() {
                 AGENT MEMORY
               </h2>
               <p className="text-[#8b949e] font-mono text-[10px] tracking-widest uppercase">
-                Structured records + semantic search
+                Structured records + relevance scoring + semantic search
               </p>
             </div>
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-[10px] font-mono gap-1"
+            onClick={() => refreshMutation.mutate()}
+            disabled={refreshMutation.isPending}
+          >
+            <RefreshCw className={cn("h-3 w-3", refreshMutation.isPending && "animate-spin")} />
+            {refreshMutation.isPending ? "Refreshing..." : "Refresh Relevance"}
+          </Button>
         </header>
+
+        {/* Relevance stats bar */}
+        <div className="grid grid-cols-4 gap-3">
+          <MiniStat label="MEMORIES" value={memories.length} />
+          <MiniStat label="AVG RELEVANCE" value={`${Math.round(avgRelevance * 100)}%`} />
+          <MiniStat label="TOTAL ACCESSES" value={totalAccesses} />
+          <MiniStat label="NOISE" value={noiseCount} accent={noiseCount > 0 ? "text-red-400" : undefined} />
+        </div>
 
         <div className="flex gap-2 max-w-xl">
           <Input
@@ -111,7 +207,7 @@ export default function Memory() {
             }}
           />
           <button
-            className="px-4 bg-primary text-primary-foreground font-mono text-xs font-bold"
+            className="px-4 bg-primary text-primary-foreground font-mono text-xs font-bold rounded"
             onClick={() => searchQ.trim() && searchMutation.mutate(searchQ.trim())}
           >
             <Search className="h-4 w-4" />
@@ -119,6 +215,7 @@ export default function Memory() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          {/* Sidebar: workspaces */}
           <div className="lg:col-span-3 space-y-4">
             <div className="text-[10px] text-[#8b949e] font-bold tracking-[0.2em] uppercase px-1">
               WORKSPACES
@@ -166,34 +263,30 @@ export default function Memory() {
             </Card>
           </div>
 
+          {/* Main: memory records + failures */}
           <div className="lg:col-span-9 space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Memory records */}
               <div className="space-y-4">
                 <div className="text-[10px] text-[#8b949e] font-bold tracking-[0.2em] uppercase px-1 flex items-center gap-2">
                   <BookOpen className="h-3 w-3" /> MEMORY_RECORDS
+                  {searchResults.length > 0 && (
+                    <Badge variant="outline" className="text-[8px] ml-2">
+                      {searchResults.length} search results
+                    </Badge>
+                  )}
                 </div>
-                <Card className="bg-[#111317] border-[#21262d] rounded-md h-[400px] overflow-hidden">
+                <Card className="bg-[#111317] border-[#21262d] rounded-md h-[500px] overflow-hidden">
                   <ScrollArea className="h-full p-4">
                     <div className="space-y-3">
                       {displayList.map((m) => (
-                        <div
+                        <MemoryCard
                           key={m.id}
-                          className="p-3 border border-[#21262d] rounded font-mono text-[10px]"
-                        >
-                          <div className="flex justify-between mb-2">
-                            <Badge variant="outline" className="text-[8px]">
-                              {m.kind}
-                            </Badge>
-                            <span className="text-[#8b949e]">{m.source}</span>
-                          </div>
-                          <p className="text-[#8b949e] whitespace-pre-wrap line-clamp-4">
-                            {m.content}
-                          </p>
-                          <div className="text-[8px] text-[#8b949e] mt-2 opacity-60">
-                            {m.created_at}
-                            {m.score != null && ` · score ${m.score.toFixed(2)}`}
-                          </div>
-                        </div>
+                          memory={m}
+                          onFeedback={(useful) =>
+                            feedbackMutation.mutate({ memoryId: m.id, useful })
+                          }
+                        />
                       ))}
                       {displayList.length === 0 && (
                         <div className="text-center text-[#8b949e] italic py-20">
@@ -205,11 +298,12 @@ export default function Memory() {
                 </Card>
               </div>
 
+              {/* Failure signatures */}
               <div className="space-y-4">
                 <div className="text-[10px] text-secondary font-bold tracking-[0.2em] uppercase px-1 flex items-center gap-2">
                   <AlertTriangle className="h-3 w-3" /> FAILURE_SIGNATURES
                 </div>
-                <Card className="bg-[#111317] border-[#21262d] rounded-md h-[400px] overflow-hidden">
+                <Card className="bg-[#111317] border-[#21262d] rounded-md h-[500px] overflow-hidden">
                   <ScrollArea className="h-full p-6">
                     <div className="space-y-3">
                       {signatures.map((data, i) => (
@@ -237,5 +331,93 @@ export default function Memory() {
         </div>
       </div>
     </Layout>
+  );
+}
+
+function MemoryCard({
+  memory: m,
+  onFeedback,
+}: {
+  memory: MemoryRecord;
+  onFeedback: (useful: boolean) => void;
+}) {
+  return (
+    <div className="p-3 border border-[#21262d] rounded font-mono text-[10px] group hover:border-primary/20 transition-all">
+      {/* Header: kind + tier + source */}
+      <div className="flex justify-between items-center mb-2">
+        <div className="flex items-center gap-1.5">
+          <Badge variant="outline" className={cn("text-[8px]", kindColor(m.kind))}>
+            {m.kind}
+          </Badge>
+          {m.quality_tier && m.quality_tier !== "unrated" && (
+            <Badge variant="outline" className={cn("text-[7px] px-1", tierColor(m.quality_tier))}>
+              {m.quality_tier}
+            </Badge>
+          )}
+        </div>
+        <span className="text-[#8b949e]">{m.source}</span>
+      </div>
+
+      {/* Content */}
+      <p className="text-[#8b949e] whitespace-pre-wrap line-clamp-4">{m.content}</p>
+
+      {/* Footer: relevance + access + feedback */}
+      <div className="flex items-center justify-between mt-2 pt-2 border-t border-[#21262d]/50">
+        <div className="flex items-center gap-3">
+          {/* Relevance bar */}
+          {m.relevance_score != null && m.relevance_score > 0 && (
+            <div className="flex items-center gap-1">
+              <Sparkles className="h-2.5 w-2.5 text-yellow-500" />
+              {relevanceBar(m.relevance_score)}
+            </div>
+          )}
+
+          {/* Access count */}
+          {(m.access_count ?? 0) > 0 && (
+            <div className="flex items-center gap-1 text-[9px] text-[#8b949e]">
+              <Eye className="h-2.5 w-2.5" />
+              {m.access_count}
+            </div>
+          )}
+
+          {/* Search score */}
+          {m.score != null && (
+            <span className="text-[9px] text-[#8b949e]">
+              match: {(m.score * 100).toFixed(0)}%
+            </span>
+          )}
+        </div>
+
+        {/* Feedback buttons */}
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            className="p-1 hover:bg-green-500/10 rounded transition-colors"
+            onClick={() => onFeedback(true)}
+            title="Mark as useful"
+          >
+            <ThumbsUp className="h-3 w-3 text-green-500" />
+          </button>
+          <button
+            className="p-1 hover:bg-red-500/10 rounded transition-colors"
+            onClick={() => onFeedback(false)}
+            title="Mark as not useful"
+          >
+            <ThumbsDown className="h-3 w-3 text-red-500" />
+          </button>
+        </div>
+      </div>
+
+      {/* Timestamp */}
+      <div className="text-[8px] text-[#8b949e] mt-1 opacity-60">{m.created_at}</div>
+    </div>
+  );
+}
+
+function MiniStat({ label, value, accent }: { label: string; value: string | number; accent?: string }) {
+  return (
+    <div className="bg-[#111317] border border-[#21262d] rounded p-3">
+      <div className="text-[8px] text-[#8b949e] uppercase tracking-widest mb-1">{label}</div>
+      <div className={cn("text-lg font-black", accent || "text-white")}>{value}</div>
+    </div>
   );
 }

@@ -40,6 +40,16 @@ class WatcherConfig(BaseModel):
     extensions: Optional[List[str]] = None
     ignore_patterns: Optional[List[str]] = None
 
+class SmartContextPayload(BaseModel):
+    task: str
+    repo_id: str
+    max_tokens: int = 3000
+
+class FeedbackPayload(BaseModel):
+    memory_id: str
+    useful: bool
+    context: Optional[str] = None
+
 def build_default_config() -> Dict:
     return {
         "watch_paths": default_watch_paths(),
@@ -449,6 +459,86 @@ def create_app(
         return {"events": ws_manager.get_history(
             since=since, event_types=types_list, repo_id=repo_id, limit=limit
         )}
+
+    # --- Relevance scoring & smart context ---
+
+    @app.post("/api/v1/context/smart")
+    def smart_context(payload: SmartContextPayload, request: Request):
+        t0 = time.perf_counter()
+        rid = payload.repo_id
+        hits = store.search(payload.task, repo_id=rid, limit=30)
+        hits = [h for h in hits if h.get("quality_tier") != "noise"]
+        hits.sort(key=lambda m: (m.get("score", 0), m.get("relevance_score", 0)), reverse=True)
+
+        context_parts = []
+        token_count = 0
+        for mem in hits:
+            est_tokens = int(len(mem["content"].split()) * 1.3)
+            if token_count + est_tokens > payload.max_tokens:
+                break
+            context_parts.append(mem)
+            token_count += est_tokens
+            try:
+                store.engine.record_access(mem["id"], "context_inject", payload.task)
+            except Exception:
+                pass
+
+        _log_http(
+            request, "smart_context",
+            {"repo_id": rid, "task": payload.task[:200]},
+            f"{len(context_parts)} memories, ~{token_count} tokens",
+            (time.perf_counter() - t0) * 1000,
+        )
+        return {
+            "memories": context_parts,
+            "token_estimate": token_count,
+            "system_prompt_fragment": _build_prompt_fragment(rid, context_parts),
+        }
+
+    @app.post("/api/v1/feedback")
+    def memory_feedback(payload: FeedbackPayload):
+        store.engine.record_feedback(payload.memory_id, payload.useful, payload.context or "")
+        new_score = store.engine.compute_relevance_score(payload.memory_id)
+        store.engine._conn.execute(
+            "UPDATE memories SET relevance_score = ? WHERE id = ?",
+            (new_score, payload.memory_id),
+        )
+        store.engine._conn.commit()
+        return {"ok": True, "new_relevance_score": new_score}
+
+    @app.post("/api/v1/relevance/refresh")
+    def refresh_relevance(repo_id: Optional[str] = None):
+        noise_count = store.engine.classify_noise()
+        refresh_count = store.engine.refresh_relevance_scores(repo_id)
+        return {
+            "refreshed": refresh_count,
+            "noise_classified": noise_count,
+        }
+
+    @app.post("/api/v1/context/generate")
+    def generate_context_file(repo_id: str):
+        """Generate .agent-memory/context.md for a project."""
+        repos_map = {}
+        map_path = store.root / "repos.json"
+        if map_path.exists():
+            import json as _json
+            try:
+                repos_map = _json.loads(map_path.read_text())
+            except Exception:
+                pass
+        project_path = repos_map.get(repo_id)
+        if not project_path:
+            raise HTTPException(404, f"No path found for repo {repo_id}")
+        out = store.generate_context_file(repo_id, project_path)
+        return {"path": str(out), "repo_id": repo_id}
+
+    def _build_prompt_fragment(repo_id: str, memories: List[Dict]) -> str:
+        if not memories:
+            return ""
+        lines = [f"You are working on project `{repo_id}`. Relevant context from memory:\n"]
+        for m in memories:
+            lines.append(f"- [{m['kind']}] {m['content'][:300]}")
+        return "\n".join(lines)
 
     ui_dist = Path(__file__).resolve().parent.parent / "ui" / "dist"
     if serve_ui and ui_dist.exists():

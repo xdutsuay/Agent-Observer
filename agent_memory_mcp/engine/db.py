@@ -1,4 +1,4 @@
-"""SQLite memory engine with FTS5 search and optional embeddings."""
+"""SQLite memory engine with FTS5 search, relevance scoring, and embeddings."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -27,6 +27,23 @@ KIND_ALIASES = {
 }
 
 LEGACY_KINDS = ("failure", "decision", "attempt")
+
+# Relevance scoring weights
+KIND_WEIGHTS = {
+    "decision": 1.0,
+    "fact": 0.9,
+    "preference": 0.85,
+    "failure": 0.7,
+    "attempt": 0.3,
+}
+
+RELEVANCE_BLEND = {
+    "semantic": 0.45,
+    "relevance": 0.30,
+    "recency": 0.25,
+}
+
+RECENCY_HALF_LIFE_DAYS = 14
 
 
 def _normalize_kind(kind: str) -> str:
@@ -73,6 +90,7 @@ class MemoryEngine:
         self._lock = threading.RLock()
         self._embedder = embedder  # EmbeddingProvider or None (uses _simple_embedding)
         self._init_schema()
+        self._check_embedding_dimension()
 
     def _init_schema(self) -> None:
         c = self._conn
@@ -113,10 +131,70 @@ class MemoryEngine:
                 memory_id TEXT,
                 PRIMARY KEY (repo_id, signature)
             );
+            CREATE TABLE IF NOT EXISTS memory_access_log (
+                id TEXT PRIMARY KEY,
+                memory_id TEXT NOT NULL,
+                access_type TEXT NOT NULL,
+                query_text TEXT,
+                session_id TEXT,
+                host_ide TEXT,
+                was_useful INTEGER,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (memory_id) REFERENCES memories(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_access_log_memory
+                ON memory_access_log(memory_id, created_at DESC);
             """
         )
+        self._migrate_relevance_columns(c)
         self._ensure_standalone_fts(c)
         c.commit()
+
+    def _migrate_relevance_columns(self, c: sqlite3.Connection) -> None:
+        """Add relevance scoring columns if they don't exist yet."""
+        existing = {
+            row[1]
+            for row in c.execute("PRAGMA table_info(memories)").fetchall()
+        }
+        migrations = [
+            ("access_count", "INTEGER DEFAULT 0"),
+            ("last_accessed", "TEXT"),
+            ("relevance_score", "REAL DEFAULT 0.0"),
+            ("quality_tier", "TEXT DEFAULT 'unrated'"),
+        ]
+        for col, typedef in migrations:
+            if col not in existing:
+                c.execute(f"ALTER TABLE memories ADD COLUMN {col} {typedef}")
+
+    def _check_embedding_dimension(self) -> None:
+        """Detect embedding dimension mismatch and trigger reindex if needed."""
+        if self._embedder is None:
+            return
+        try:
+            row = self._conn.execute(
+                "SELECT embedding_json FROM memory_embeddings LIMIT 1"
+            ).fetchone()
+            if row:
+                stored_dim = len(json.loads(row["embedding_json"]))
+                target_dim = self._embedder.dim
+                if stored_dim != target_dim:
+                    print(
+                        f"[MEMORY] Embedding dimension changed {stored_dim} → {target_dim}, "
+                        f"reindexing in background..."
+                    )
+                    # Run reindex in background thread to avoid blocking startup
+                    threading.Thread(
+                        target=self._background_reindex, daemon=True
+                    ).start()
+        except Exception:
+            pass
+
+    def _background_reindex(self) -> None:
+        try:
+            count = self.reindex_embeddings()
+            print(f"[MEMORY] Reindexed {count} embeddings with new provider.")
+        except Exception as e:
+            print(f"[MEMORY] Reindex failed: {e}")
 
     def _ensure_standalone_fts(self, c: sqlite3.Connection) -> None:
         """Standalone FTS5 (external content= caused 'API misuse' on insert)."""
@@ -306,7 +384,7 @@ class MemoryEngine:
                 meta = json.loads(row["metadata_json"])
             except json.JSONDecodeError:
                 pass
-        return {
+        d: Dict[str, Any] = {
             "id": row["id"],
             "repo_id": row["repo_id"],
             "kind": row["kind"],
@@ -317,6 +395,12 @@ class MemoryEngine:
             "summary": row["summary"],
             "created_at": row["created_at"],
         }
+        # Include relevance columns when present
+        keys = row.keys() if hasattr(row, "keys") else []
+        for col in ("access_count", "last_accessed", "relevance_score", "quality_tier"):
+            if col in keys:
+                d[col] = row[col]
+        return d
 
     def search(
         self,
@@ -386,7 +470,9 @@ class MemoryEngine:
         vec_rows = self._conn.execute(
             f"""
             SELECT m.id, m.repo_id, m.kind, m.content, m.source, m.metadata_json,
-                   m.session_id, m.summary, m.created_at, e.embedding_json
+                   m.session_id, m.summary, m.created_at,
+                   m.access_count, m.last_accessed, m.relevance_score, m.quality_tier,
+                   e.embedding_json
             FROM memories m
             JOIN memory_embeddings e ON e.memory_id = m.id
             WHERE {where}
@@ -406,8 +492,47 @@ class MemoryEngine:
             if not prev or d["score"] > prev.get("score", 0):
                 results[d["id"]] = d
 
+        # Blend semantic/keyword score with relevance and recency
+        now = datetime.now(timezone.utc)
+        for mid, d in results.items():
+            raw = d.get("score", 0)
+
+            # Recency component
+            try:
+                created = datetime.fromisoformat(d["created_at"])
+                age_days = max((now - created).total_seconds() / 86400, 0.01)
+                recency = math.pow(0.5, age_days / RECENCY_HALF_LIFE_DAYS)
+            except (ValueError, KeyError):
+                recency = 0.5
+
+            # Relevance component (from stored score)
+            rel = d.get("relevance_score") or 0.0
+
+            # Noise penalty — exclude noise tier entirely
+            tier = d.get("quality_tier") or "unrated"
+            if tier == "noise":
+                d["score"] = 0.0
+                continue
+
+            d["score"] = (
+                RELEVANCE_BLEND["semantic"] * min(raw, 1.0)
+                + RELEVANCE_BLEND["relevance"] * rel
+                + RELEVANCE_BLEND["recency"] * recency
+            )
+
         ranked = sorted(results.values(), key=lambda x: x.get("score", 0), reverse=True)
-        return ranked[:limit]
+        # Filter out noise
+        ranked = [r for r in ranked if r.get("score", 0) > 0]
+        final = ranked[:limit]
+
+        # Record access for returned results
+        for hit in final:
+            try:
+                self.record_access(hit["id"], "search_hit", query)
+            except Exception:
+                pass
+
+        return final
 
     def aggregate_markdown(self, repo_id: str, kind: str) -> str:
         """Build legacy markdown buffer for MCP resources."""
@@ -487,6 +612,151 @@ class MemoryEngine:
             count += cur.rowcount
         self._conn.commit()
         return count
+
+    # ── Relevance scoring ──────────────────────────────────────────────
+
+    def record_access(
+        self,
+        memory_id: str,
+        access_type: str,
+        query: str = "",
+        session_id: Optional[str] = None,
+        host_ide: Optional[str] = None,
+    ) -> None:
+        """Record that a memory was surfaced to an agent."""
+        now = _utc_now()
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO memory_access_log
+                   (id, memory_id, access_type, query_text, session_id, host_ide, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (str(uuid.uuid4()), memory_id, access_type, query, session_id, host_ide, now),
+            )
+            self._conn.execute(
+                """UPDATE memories
+                   SET access_count = COALESCE(access_count, 0) + 1, last_accessed = ?
+                   WHERE id = ?""",
+                (now, memory_id),
+            )
+            self._conn.commit()
+
+    def record_feedback(
+        self,
+        memory_id: str,
+        useful: bool,
+        context: str = "",
+    ) -> None:
+        """Record whether a retrieved memory was useful."""
+        with self._lock:
+            # Update the most recent access log entry for this memory
+            self._conn.execute(
+                """UPDATE memory_access_log
+                   SET was_useful = ?
+                   WHERE id = (
+                       SELECT id FROM memory_access_log
+                       WHERE memory_id = ? ORDER BY created_at DESC LIMIT 1
+                   )""",
+                (1 if useful else 0, memory_id),
+            )
+            self._conn.commit()
+
+    def compute_relevance_score(self, memory_id: str) -> float:
+        """Compute blended relevance score for a memory."""
+        row = self._conn.execute(
+            """SELECT kind, access_count, last_accessed, created_at, quality_tier
+               FROM memories WHERE id = ?""",
+            (memory_id,),
+        ).fetchone()
+        if not row:
+            return 0.0
+
+        now = datetime.now(timezone.utc)
+
+        # Kind weight
+        kind_w = KIND_WEIGHTS.get(row["kind"], 0.3)
+
+        # Access frequency (log scale, capped)
+        access_count = row["access_count"] or 0
+        access_freq = min(math.log1p(access_count) / math.log1p(50), 1.0)
+
+        # Recency decay (half-life)
+        created = datetime.fromisoformat(row["created_at"])
+        age_days = max((now - created).total_seconds() / 86400, 0.01)
+        recency = math.pow(0.5, age_days / RECENCY_HALF_LIFE_DAYS)
+
+        # Access recency
+        access_recency = 0.0
+        if row["last_accessed"]:
+            last_acc = datetime.fromisoformat(row["last_accessed"])
+            acc_age_days = max((now - last_acc).total_seconds() / 86400, 0.01)
+            access_recency = math.pow(0.5, acc_age_days / RECENCY_HALF_LIFE_DAYS)
+
+        # Usefulness ratio
+        usefulness = 0.5  # neutral default
+        if access_count > 0:
+            feedback_row = self._conn.execute(
+                """SELECT COUNT(*) AS total,
+                          SUM(CASE WHEN was_useful = 1 THEN 1 ELSE 0 END) AS positive
+                   FROM memory_access_log
+                   WHERE memory_id = ? AND was_useful IS NOT NULL""",
+                (memory_id,),
+            ).fetchone()
+            if feedback_row and feedback_row["total"] > 0:
+                usefulness = feedback_row["positive"] / feedback_row["total"]
+
+        # Noise penalty
+        tier = row["quality_tier"] or "unrated"
+        noise_penalty = 0.1 if tier == "noise" else 1.0
+
+        score = (
+            0.20 * kind_w
+            + 0.25 * access_freq
+            + 0.20 * recency
+            + 0.15 * access_recency
+            + 0.20 * usefulness
+        ) * noise_penalty
+
+        return round(min(max(score, 0.0), 1.0), 4)
+
+    def refresh_relevance_scores(self, repo_id: Optional[str] = None) -> int:
+        """Recompute relevance scores for all memories in a repo (or all repos)."""
+        with self._lock:
+            clause = "WHERE deleted = 0"
+            params: list = []
+            if repo_id:
+                clause += " AND repo_id = ?"
+                params.append(repo_id)
+            rows = self._conn.execute(
+                f"SELECT id FROM memories {clause}", params
+            ).fetchall()
+            count = 0
+            for row in rows:
+                score = self.compute_relevance_score(row["id"])
+                self._conn.execute(
+                    "UPDATE memories SET relevance_score = ? WHERE id = ?",
+                    (score, row["id"]),
+                )
+                count += 1
+            self._conn.commit()
+            return count
+
+    def classify_noise(self, max_age_days: int = 7) -> int:
+        """Auto-demote stale, never-accessed attempts to noise tier."""
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=max_age_days)
+        ).isoformat()
+        with self._lock:
+            cur = self._conn.execute(
+                """UPDATE memories SET quality_tier = 'noise'
+                   WHERE kind = 'attempt'
+                   AND COALESCE(access_count, 0) = 0
+                   AND created_at < ?
+                   AND COALESCE(quality_tier, 'unrated') = 'unrated'
+                   AND deleted = 0""",
+                (cutoff,),
+            )
+            self._conn.commit()
+            return cur.rowcount
 
     def update_summary(self, memory_id: str, summary: str) -> None:
         self._conn.execute(

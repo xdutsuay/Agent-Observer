@@ -1,8 +1,9 @@
 import { Layout } from "@/components/layout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { useAgentSimulation } from "@/lib/simulation";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   Cpu,
@@ -13,6 +14,12 @@ import {
   Flame,
   Plug,
   HardDrive,
+  Sparkles,
+  RefreshCw,
+  Trash2,
+  Zap,
+  Eye,
+  ThumbsUp,
 } from "lucide-react";
 import {
   AreaChart,
@@ -28,6 +35,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useState, useEffect } from "react";
 import { Link } from "wouter";
+import { apiRequest } from "@/lib/queryClient";
 
 interface PatternReport {
   health_score: { score: number; grade: string; reasons: string[] };
@@ -55,6 +63,7 @@ interface Hotspot {
 export default function Dashboard() {
   const { events, metrics, isRunning, repos } = useAgentSimulation();
   const [chartData, setChartData] = useState<{ time: number; val: number }[]>([]);
+  const qc = useQueryClient();
 
   const { data: patterns } = useQuery<PatternReport>({
     queryKey: ["/api/patterns"],
@@ -74,6 +83,8 @@ export default function Dashboard() {
   const { data: usageSummary } = useQuery<{
     last_24h: number;
     total_interactions: number;
+    reads: number;
+    writes: number;
     running_ides: { label: string }[];
   }>({
     queryKey: ["/api/usage/summary"],
@@ -90,6 +101,17 @@ export default function Dashboard() {
   }>({
     queryKey: ["/api/disk-usage"],
     refetchInterval: 60000,
+  });
+
+  const refreshMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/v1/relevance/refresh");
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/patterns"] });
+      qc.invalidateQueries({ queryKey: ["/api/projects"] });
+    },
   });
 
   useEffect(() => {
@@ -129,9 +151,21 @@ export default function Dashboard() {
             </p>
           </div>
 
-          {/* Health badge */}
-          {health && (
-            <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            {/* Refresh relevance button */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-[10px] font-mono gap-1 h-8"
+              onClick={() => refreshMutation.mutate()}
+              disabled={refreshMutation.isPending}
+            >
+              <RefreshCw className={cn("h-3 w-3", refreshMutation.isPending && "animate-spin")} />
+              {refreshMutation.isPending ? "Refreshing..." : "Refresh Scores"}
+            </Button>
+
+            {/* Health badge */}
+            {health && (
               <div className="text-right">
                 <div className="text-[10px] text-[#8b949e] uppercase tracking-widest mb-1">Health Score</div>
                 <div className={cn("text-3xl font-black", gradeColor(health.grade))}>
@@ -139,75 +173,76 @@ export default function Dashboard() {
                   <span className="text-sm ml-1 opacity-60">{health.score}/100</span>
                 </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
         {/* Stat cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <StatCard icon={FolderOpen} label="PROJECTS" value={projects.length} color="text-primary" />
           <StatCard icon={Box} label="MEMORIES" value={patterns?.activity_trends?.total ?? 0} color="text-blue-400" />
           <StatCard icon={AlertTriangle} label="FAILURES" value={hotspots.reduce((s, h) => s + h.unresolved_failures, 0)} color="text-orange-400" />
           <StatCard icon={Activity} label="EVENTS/SEC" value={Math.round(metrics.fs_events_per_sec)} color="text-green-400" />
+          <StatCard icon={Sparkles} label="RELEVANCE" value={`${refreshMutation.data?.refreshed ?? "—"}`} color="text-yellow-400" subtitle={refreshMutation.data ? `${refreshMutation.data.noise_classified} noise` : undefined} />
         </div>
 
-        <Link href="/usage">
-          <Card className="bg-[#111317] border-[#21262d] hover:border-primary/40 transition-colors cursor-pointer">
-            <CardContent className="p-4 flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <Plug className="h-5 w-5 text-primary" />
-                <div>
-                  <div className="text-[10px] text-[#8b949e] uppercase tracking-widest">Agent usage</div>
-                  <div className="text-sm font-bold text-white">
-                    {usageSummary?.last_24h ?? 0} MCP/HTTP calls in 24h
-                    <span className="text-[#8b949e] font-normal ml-2">
-                      ({usageSummary?.total_interactions ?? 0} total)
-                    </span>
+        {/* Usage + Disk row */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Link href="/usage">
+            <Card className="bg-[#111317] border-[#21262d] hover:border-primary/40 transition-colors cursor-pointer h-full">
+              <CardContent className="p-4 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <Plug className="h-5 w-5 text-primary" />
+                  <div>
+                    <div className="text-[10px] text-[#8b949e] uppercase tracking-widest">Agent usage</div>
+                    <div className="text-sm font-bold text-white">
+                      {usageSummary?.last_24h ?? 0} calls in 24h
+                      <span className="text-[#8b949e] font-normal ml-2">
+                        ({usageSummary?.reads ?? 0} reads · {usageSummary?.writes ?? 0} writes)
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
-              <div className="flex flex-wrap gap-1 justify-end">
-                {(usageSummary?.running_ides || []).slice(0, 4).map((ide) => (
-                  <Badge key={ide.label} variant="outline" className="text-[8px]">
-                    {ide.label}
-                  </Badge>
-                ))}
-                {(usageSummary?.running_ides?.length ?? 0) === 0 && (
-                  <span className="text-[10px] text-[#8b949e]">Connect Cursor or Claude Code via MCP</span>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </Link>
-
-        {disk && (
-          <Card className="bg-[#111317] border-[#21262d]">
-            <CardContent className="p-4 flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <HardDrive className="h-5 w-5 text-primary" />
-                <div>
-                  <div className="text-[10px] text-[#8b949e] uppercase tracking-widest">Disk usage</div>
-                  <div className="text-sm font-bold text-white">
-                    Agent store {disk.overall.data_root_bytes_human}
-                    <span className="text-[#8b949e] font-normal ml-2">
-                      · workspaces {disk.overall.total_workspace_human}
-                    </span>
-                  </div>
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {disk.projects
-                  .filter((p) => p.memory_store_bytes > 0 || (p.workspace_bytes ?? 0) > 0)
-                  .slice(0, 5)
-                  .map((p) => (
-                    <Badge key={p.name} variant="outline" className="text-[8px] font-mono">
-                      {p.name}
+                <div className="flex flex-wrap gap-1 justify-end">
+                  {(usageSummary?.running_ides || []).slice(0, 4).map((ide) => (
+                    <Badge key={ide.label} variant="outline" className="text-[8px]">
+                      {ide.label}
                     </Badge>
                   ))}
-              </div>
-            </CardContent>
-          </Card>
-        )}
+                </div>
+              </CardContent>
+            </Card>
+          </Link>
+
+          {disk && (
+            <Card className="bg-[#111317] border-[#21262d]">
+              <CardContent className="p-4 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <HardDrive className="h-5 w-5 text-primary" />
+                  <div>
+                    <div className="text-[10px] text-[#8b949e] uppercase tracking-widest">Disk usage</div>
+                    <div className="text-sm font-bold text-white">
+                      Agent store {disk.overall.data_root_bytes_human}
+                      <span className="text-[#8b949e] font-normal ml-2">
+                        · workspaces {disk.overall.total_workspace_human}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {disk.projects
+                    .filter((p) => p.memory_store_bytes > 0 || (p.workspace_bytes ?? 0) > 0)
+                    .slice(0, 5)
+                    .map((p) => (
+                      <Badge key={p.name} variant="outline" className="text-[8px] font-mono">
+                        {p.name}
+                      </Badge>
+                    ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Activity chart */}
@@ -336,28 +371,28 @@ export default function Dashboard() {
           </Card>
         </div>
 
-        {/* MCP in Claude section */}
+        {/* MCP tools */}
         <div className="space-y-3">
           <div className="text-[10px] text-primary font-bold tracking-[0.15em] uppercase px-1">
-            MCP Integration — Connected to Claude Desktop
+            MCP Integration — Available Tools
           </div>
           <Card className="bg-[#111317] border-[#21262d]">
             <CardContent className="p-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
-                  <h3 className="text-sm font-bold text-white mb-3">Available MCP Tools</h3>
+                  <h3 className="text-sm font-bold text-white mb-3">Core Tools</h3>
                   <div className="space-y-2">
                     {[
                       { name: "remember", desc: "Store memories (failures, decisions, facts)" },
                       { name: "search_memory", desc: "Semantic + keyword search" },
-                      { name: "list_projects", desc: "All tracked projects with metadata" },
+                      { name: "get_repo_context", desc: "Load project context at session start" },
                       { name: "global_search", desc: "Cross-repo search" },
-                      { name: "get_pattern_report", desc: "Health scores, trends, patterns" },
-                      { name: "get_related_memories", desc: "Find related by content/time" },
-                      { name: "failure_hotspots", desc: "Projects with most failures" },
+                      { name: "list_projects", desc: "All tracked projects" },
                       { name: "switch_project_context", desc: "Full project context bundle" },
+                      { name: "get_pattern_report", desc: "Health scores, trends" },
+                      { name: "get_related_memories", desc: "Find related by content/time" },
                       { name: "find_similar_failures", desc: "Cross-project failure matching" },
-                      { name: "get_repo_context", desc: "Failures + decisions + attempts" },
+                      { name: "failure_hotspots", desc: "Projects with most failures" },
                       { name: "mark_failure_resolved", desc: "Resolve failure signatures" },
                       { name: "forget", desc: "Soft-delete memories" },
                     ].map((tool) => (
@@ -370,6 +405,24 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div>
+                  <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-yellow-500" /> Intelligence Tools
+                    <Badge variant="outline" className="text-[8px] bg-yellow-500/10 text-yellow-400 border-yellow-500/20">NEW</Badge>
+                  </h3>
+                  <div className="space-y-2 mb-6">
+                    {[
+                      { name: "smart_context", desc: "Task-specific memory retrieval with token budget", icon: Zap },
+                      { name: "memory_feedback", desc: "Report if a memory was useful (closes the loop)", icon: ThumbsUp },
+                      { name: "refresh_relevance", desc: "Recompute scores + classify noise", icon: RefreshCw },
+                    ].map((tool) => (
+                      <div key={tool.name} className="flex items-center gap-2">
+                        <div className="h-1.5 w-1.5 rounded-full bg-yellow-400" />
+                        <span className="text-[11px] text-yellow-400 font-bold">{tool.name}</span>
+                        <span className="text-[10px] text-[#8b949e]">— {tool.desc}</span>
+                      </div>
+                    ))}
+                  </div>
+
                   <h3 className="text-sm font-bold text-white mb-3">Connection Info</h3>
                   <div className="space-y-3 text-[11px]">
                     <div className="flex justify-between">
@@ -377,16 +430,12 @@ export default function Dashboard() {
                       <span className="text-white">MCP stdio + HTTP :9000</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-[#8b949e]">WebSocket</span>
-                      <span className="text-white">ws://localhost:9000/ws/events</span>
-                    </div>
-                    <div className="flex justify-between">
                       <span className="text-[#8b949e]">Tools</span>
-                      <span className="text-green-400 font-bold">13 active</span>
+                      <span className="text-green-400 font-bold">15 active</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-[#8b949e]">Data root</span>
-                      <span className="text-white">~/agent_companion_data</span>
+                      <span className="text-[#8b949e]">New endpoints</span>
+                      <span className="text-yellow-400 font-bold">/api/v1/context/smart · /api/v1/feedback</span>
                     </div>
                   </div>
                   <div className="mt-4 p-3 bg-[#0a0b0d] rounded border border-[#21262d]">
@@ -407,7 +456,7 @@ export default function Dashboard() {
   );
 }
 
-function StatCard({ icon: Icon, label, value, color }: { icon: any; label: string; value: number | string; color: string }) {
+function StatCard({ icon: Icon, label, value, color, subtitle }: { icon: any; label: string; value: number | string; color: string; subtitle?: string }) {
   return (
     <Card className="bg-[#111317] border-[#21262d] hover:border-primary/20 transition-all">
       <CardContent className="p-5">
@@ -418,6 +467,7 @@ function StatCard({ icon: Icon, label, value, color }: { icon: any; label: strin
           <span className="text-[10px] font-bold text-[#8b949e] tracking-[0.1em] uppercase">{label}</span>
         </div>
         <p className="text-2xl font-black text-white tracking-tighter">{value}</p>
+        {subtitle && <p className="text-[9px] text-[#8b949e] mt-1">{subtitle}</p>}
       </CardContent>
     </Card>
   );

@@ -105,7 +105,11 @@ def create_mcp_server(root: str | Path) -> Server:
         return [
             Tool(
                 name="remember",
-                description="Store a memory entry for a project (failures, decisions, attempts, facts, preferences).",
+                description=(
+                    "Store a memory entry for a project. Use 'decision' for architectural choices and trade-offs, "
+                    "'failure' for errors and bugs encountered, 'fact' for project-specific knowledge and conventions, "
+                    "'preference' for user/team preferences. Avoid storing trivial file changes as 'attempt'."
+                ),
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -126,7 +130,12 @@ def create_mcp_server(root: str | Path) -> Server:
             ),
             Tool(
                 name="search_memory",
-                description="Search repo-scoped memories by keyword and semantic similarity.",
+                description=(
+                    "Search repo-scoped memories by keyword and semantic similarity. "
+                    "Use this when you encounter an error (search for similar past failures), "
+                    "before making architectural decisions (search for prior decisions on the topic), "
+                    "or when you need project-specific context."
+                ),
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -140,7 +149,11 @@ def create_mcp_server(root: str | Path) -> Server:
             ),
             Tool(
                 name="get_repo_context",
-                description="Get a pre-packaged bundle of failures, decisions, attempts, and facts for a repo.",
+                description=(
+                    "Get failures, decisions, facts, and recent attempts for a project. "
+                    "IMPORTANT: Call this at the START of every coding session to load "
+                    "relevant project context before making changes. Also call after switching repos."
+                ),
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -204,7 +217,11 @@ def create_mcp_server(root: str | Path) -> Server:
             ),
             Tool(
                 name="global_search",
-                description="Search across ALL projects (cross-repo semantic + keyword search).",
+                description=(
+                    "Search across ALL projects (cross-repo semantic + keyword search). "
+                    "Use this when a problem might have been solved in another project, "
+                    "or to find patterns across your codebase."
+                ),
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -256,6 +273,56 @@ def create_mcp_server(root: str | Path) -> Server:
                     "type": "object",
                     "properties": {
                         "limit": {"type": "integer", "default": 10},
+                    },
+                },
+            ),
+            Tool(
+                name="memory_feedback",
+                description=(
+                    "Report whether a retrieved memory was useful in the current task. "
+                    "Call this after using a memory to close the feedback loop — "
+                    "it helps the system surface better memories over time."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "memory_id": {"type": "string"},
+                        "useful": {"type": "boolean"},
+                        "context": {
+                            "type": "string",
+                            "description": "Brief note on why the memory was or wasn't useful",
+                        },
+                    },
+                    "required": ["memory_id", "useful"],
+                },
+            ),
+            Tool(
+                name="smart_context",
+                description=(
+                    "Get the most relevant memories for a specific task. Returns memories "
+                    "ranked by relevance, filtered by quality, and packed into a token budget. "
+                    "Use this when starting a new task to get targeted context."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Project path"},
+                        "task": {"type": "string", "description": "Description of the task you're about to work on"},
+                        "max_tokens": {"type": "integer", "default": 3000},
+                    },
+                    "required": ["path", "task"],
+                },
+            ),
+            Tool(
+                name="refresh_relevance",
+                description=(
+                    "Recompute relevance scores and classify noise for a project. "
+                    "Run periodically or after bulk memory imports."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Project path (omit for all projects)"},
                     },
                 },
             ),
@@ -394,6 +461,68 @@ def create_mcp_server(root: str | Path) -> Server:
                 for h in hotspots
             ]
             return [TextContent(type="text", text="\n".join(lines))]
+
+        if name == "memory_feedback":
+            mem_id = arguments["memory_id"]
+            useful = arguments["useful"]
+            context = arguments.get("context", "")
+            store.engine.record_feedback(mem_id, useful, context)
+            # Recompute relevance for this memory after feedback
+            new_score = store.engine.compute_relevance_score(mem_id)
+            store.engine._conn.execute(
+                "UPDATE memories SET relevance_score = ? WHERE id = ?", (new_score, mem_id)
+            )
+            store.engine._conn.commit()
+            return [TextContent(
+                type="text",
+                text=f"Feedback recorded for {mem_id}: {'useful' if useful else 'not useful'}. Relevance: {new_score:.3f}",
+            )]
+
+        if name == "smart_context":
+            path = arguments["path"]
+            task = arguments["task"]
+            max_tokens = arguments.get("max_tokens", 3000)
+            rid = store.resolve_repo(path)
+
+            # Search for task-relevant memories
+            hits = store.search(task, repo_id=rid, limit=30)
+            # Filter noise
+            hits = [h for h in hits if h.get("quality_tier") != "noise"]
+            # Sort by blended score (already done by search, but re-sort by relevance_score for ties)
+            hits.sort(key=lambda m: (m.get("score", 0), m.get("relevance_score", 0)), reverse=True)
+
+            # Pack into token budget
+            context_parts = []
+            token_count = 0
+            for mem in hits:
+                est_tokens = int(len(mem["content"].split()) * 1.3)
+                if token_count + est_tokens > max_tokens:
+                    break
+                context_parts.append(mem)
+                token_count += est_tokens
+                # Record as context injection access
+                try:
+                    store.engine.record_access(mem["id"], "context_inject", task)
+                except Exception:
+                    pass
+
+            if not context_parts:
+                return [TextContent(type="text", text=f"No relevant memories found for this task in {rid}.")]
+
+            lines = [f"## Smart Context for: {task[:100]}", f"Project: {rid} | {len(context_parts)} memories | ~{token_count} tokens\n"]
+            for m in context_parts:
+                score = m.get("score", 0)
+                lines.append(f"### [{m['kind']}] (relevance: {score:.2f})\n{m['content'][:500]}\n")
+            return [TextContent(type="text", text="\n".join(lines))]
+
+        if name == "refresh_relevance":
+            rid = store.resolve_repo(arguments["path"]) if arguments.get("path") else None
+            noise_count = store.engine.classify_noise()
+            refresh_count = store.engine.refresh_relevance_scores(rid)
+            return [TextContent(
+                type="text",
+                text=f"Refreshed {refresh_count} relevance scores. Classified {noise_count} memories as noise.",
+            )]
 
         raise ValueError(f"Unknown tool: {name}")
 
