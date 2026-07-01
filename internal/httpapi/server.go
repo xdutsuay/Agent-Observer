@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"agent-memory-mcp/internal/app"
 )
@@ -31,11 +33,21 @@ func (s *Server) Handler() http.Handler {
 	s.registerWsRoutes(mux)
 
 	// Fallback for static UI
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		// Just returning a simple response for now.
-		// In a real build, we'd serve the React bundle here.
-		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte("<html><body><h1>Agent Memory MCP Go Port</h1><p>API is running.</p></body></html>"))
+	distDir := "ui/dist"
+	fs := http.FileServer(http.Dir(distDir))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		path := filepath.Join(distDir, r.URL.Path)
+		
+		// Ensure we don't serve directories directly (FileServer does this, but for SPA we want index.html)
+		info, err := os.Stat(path)
+		if os.IsNotExist(err) || (err == nil && info.IsDir()) {
+			// Not found or is directory -> fallback to SPA index
+			http.ServeFile(w, r, filepath.Join(distDir, "index.html"))
+			return
+		}
+		
+		// Otherwise serve the static asset
+		fs.ServeHTTP(w, r)
 	})
 
 	return mux
