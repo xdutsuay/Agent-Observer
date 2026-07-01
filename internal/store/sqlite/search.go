@@ -180,7 +180,7 @@ func (s *Store) Search(ctx context.Context, query string, repoID *string, kinds 
 	}
 
 	// 3. Blending and Ranking
-	var ranked []core.Memory
+	ranked := []core.Memory{}
 	for _, m := range results {
 		if m.QualityTier == "noise" {
 			continue // skip noise

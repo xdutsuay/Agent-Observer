@@ -97,7 +97,7 @@ func (s *Store) SearchSessions(ctx context.Context, query string, limit int) ([]
 	}
 	defer rows.Close()
 
-	var results []core.SessionTurn
+	results := []core.SessionTurn{}
 	for rows.Next() {
 		var turn core.SessionTurn
 		var ts string

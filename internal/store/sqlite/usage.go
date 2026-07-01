@@ -50,7 +50,7 @@ func (s *Store) ListUsageInteractions(ctx context.Context, limit int, hostIDE *s
 	}
 	defer rows.Close()
 
-	var res []core.UsageInteraction
+	res := []core.UsageInteraction{}
 	for rows.Next() {
 		var u core.UsageInteraction
 		var okInt int

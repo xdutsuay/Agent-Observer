@@ -32,5 +32,10 @@ func (s *Service) ListSessions(ctx context.Context, limit int) ([]core.UsageSess
 }
 
 func (s *Service) Summary(ctx context.Context) (core.UsageSummary, error) {
-	return core.UsageSummary{}, nil
+	return core.UsageSummary{
+		ByMethod:    []core.CountByName{},
+		ByHostIDE:   []core.CountByName{},
+		ByTransport: []core.CountByName{},
+		RunningIDEs: []core.RunningIDE{},
+	}, nil
 }

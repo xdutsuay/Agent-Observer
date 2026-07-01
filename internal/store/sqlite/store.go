@@ -127,7 +127,7 @@ func (s *Store) ListMemories(ctx context.Context, repoID *string, kind *string, 
 	}
 	defer rows.Close()
 
-	var results []core.Memory
+	results := []core.Memory{}
 	for rows.Next() {
 		var m core.Memory
 		var metaJSON, sessionID, summary, lastAccessed, qualityTier sql.NullString

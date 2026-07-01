@@ -92,7 +92,7 @@ func (s *Store) ListReposDB(ctx context.Context) ([]core.Repo, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var repos []core.Repo
+	repos := []core.Repo{}
 	for rows.Next() {
 		var r core.Repo
 		if err := rows.Scan(&r.ID, &r.Path, &r.CreatedAt); err == nil {
