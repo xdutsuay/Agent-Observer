@@ -12,6 +12,7 @@ import (
 
 	"agent-memory-mcp/internal/config"
 	"agent-memory-mcp/internal/httpapi"
+	"agent-memory-mcp/internal/mcp"
 	"agent-memory-mcp/internal/memory"
 	"agent-memory-mcp/internal/store/sqlite"
 	"agent-memory-mcp/internal/usage"
@@ -70,9 +71,10 @@ func main() {
 		}
 		
 	case "mcp":
-		log.Println("MCP server starting (placeholder)")
-		// Select block just keeps it alive. In real MCP stdio, we block on io stream.
-		select {}
+		mcpServer := mcp.NewServer(memoryService, usageService)
+		if err := mcpServer.ServeStdio(); err != nil {
+			log.Fatalf("MCP Server error: %v", err)
+		}
 
 	case "refresh-relevance":
 		ctx := context.Background()
