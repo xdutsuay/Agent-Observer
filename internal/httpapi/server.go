@@ -34,21 +34,40 @@ func (s *Server) Handler() http.Handler {
 
 	// Fallback for static UI
 	distDir := "ui/dist"
-	fs := http.FileServer(http.Dir(distDir))
+	fileServer := http.FileServer(http.Dir(distDir))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Don't catch /api/ routes — they should 404 properly
+		if len(r.URL.Path) > 4 && r.URL.Path[:5] == "/api/" {
+			http.NotFound(w, r)
+			return
+		}
+
 		path := filepath.Join(distDir, r.URL.Path)
-		
-		// Ensure we don't serve directories directly (FileServer does this, but for SPA we want index.html)
+
 		info, err := os.Stat(path)
 		if os.IsNotExist(err) || (err == nil && info.IsDir()) {
-			// Not found or is directory -> fallback to SPA index
 			http.ServeFile(w, r, filepath.Join(distDir, "index.html"))
 			return
 		}
-		
-		// Otherwise serve the static asset
-		fs.ServeHTTP(w, r)
+
+		fileServer.ServeHTTP(w, r)
 	})
 
-	return mux
+	// Wrap with CORS
+	return corsMiddleware(mux)
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }

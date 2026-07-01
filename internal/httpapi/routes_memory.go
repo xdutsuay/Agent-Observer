@@ -7,12 +7,16 @@ import (
 
 func (s *Server) registerMemoryRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects", s.handleListProjects)
+	mux.HandleFunc("GET /api/repos", s.handleListRepos)
 	mux.HandleFunc("GET /api/projects/{repo_id}", s.handleGetProject)
 	mux.HandleFunc("GET /api/memory/{repo_id}", s.handleGetRepoMemory)
 	mux.HandleFunc("POST /api/memory/{repo_id}/{kind}", s.handleAddMemory)
 	mux.HandleFunc("GET /api/memories", s.handleListMemories)
+	mux.HandleFunc("GET /api/failures/{repo_id}", s.handleFailureSignatures)
 	mux.HandleFunc("POST /api/search", s.handleSearch)
 	mux.HandleFunc("POST /api/search/global", s.handleGlobalSearch)
+	mux.HandleFunc("POST /api/watcher/start", s.handleWatcherStart)
+	mux.HandleFunc("POST /api/watcher/stop", s.handleWatcherStop)
 }
 
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
@@ -22,6 +26,15 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, repos)
+}
+
+func (s *Server) handleListRepos(w http.ResponseWriter, r *http.Request) {
+	repos, err := s.memoryService.ListRepos(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	respondJSON(w, map[string]any{"repos": repos})
 }
 
 func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
@@ -137,6 +150,25 @@ func (s *Server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, mems)
+}
+
+func (s *Server) handleFailureSignatures(w http.ResponseWriter, r *http.Request) {
+	repoID := r.PathValue("repo_id")
+	report, err := s.memoryService.GetPatternReport(r.Context(), &repoID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	sigs, _ := report["recent_unresolved_signatures"]
+	respondJSON(w, map[string]any{"signatures": sigs})
+}
+
+func (s *Server) handleWatcherStart(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, map[string]string{"status": "started"})
+}
+
+func (s *Server) handleWatcherStop(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, map[string]string{"status": "stopped"})
 }
 
 func respondJSON(w http.ResponseWriter, data any) {

@@ -14,8 +14,10 @@ import (
 	"agent-memory-mcp/internal/httpapi"
 	"agent-memory-mcp/internal/ingest"
 	"agent-memory-mcp/internal/ingest/watcher"
+	"agent-memory-mcp/internal/jobs"
 	"agent-memory-mcp/internal/mcp"
 	"agent-memory-mcp/internal/memory"
+	"agent-memory-mcp/internal/patterns"
 	"agent-memory-mcp/internal/store/sqlite"
 	"agent-memory-mcp/internal/usage"
 )
@@ -71,10 +73,17 @@ func main() {
 			log.Printf("Watcher started on %s", cfg.Root)
 		}
 
+		// Start background intelligence jobs
+		detector := patterns.NewDetector(store)
+		jobRunner := jobs.NewRunner(store, detector)
+		jobRunner.Start(context.Background())
+
 		quit := make(chan os.Signal, 1)
 		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 		<-quit
 		log.Println("Shutting down server...")
+
+		jobRunner.Stop()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

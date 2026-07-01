@@ -16,9 +16,20 @@ func (s *Server) registerTelemetryRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	repos, _ := s.memoryService.ListRepos(r.Context())
+	repoCount := 0
+	if repos != nil {
+		repoCount = len(repos)
+	}
 	respondJSON(w, map[string]any{
-		"watcher_active": true,
-		"version": "0.3.0",
+		"running":            true,
+		"watcher_active":     true,
+		"version":            "0.4.0-go",
+		"repos_count":        repoCount,
+		"data_root":          "",
+		"llm_provider":       "none",
+		"nvidia_configured":  false,
+		"watch_paths":        []string{},
 	})
 }
 
@@ -30,12 +41,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	// Stub for metrics
 	respondJSON(w, map[string]any{
-		"metrics": map[string]any{
-			"total_memories": 0,
-			"total_interactions": 0,
-		},
+		"total_memories":          0,
+		"total_interactions":      0,
+		"agent_processes_detected": 0,
+		"activity_score":          0.0,
 	})
 }
 
