@@ -12,6 +12,8 @@ import (
 
 	"agent-memory-mcp/internal/config"
 	"agent-memory-mcp/internal/httpapi"
+	"agent-memory-mcp/internal/ingest"
+	"agent-memory-mcp/internal/ingest/watcher"
 	"agent-memory-mcp/internal/mcp"
 	"agent-memory-mcp/internal/memory"
 	"agent-memory-mcp/internal/store/sqlite"
@@ -58,6 +60,16 @@ func main() {
 				log.Fatalf("HTTP server error: %v", err)
 			}
 		}()
+		
+		w, err := watcher.New(500 * time.Millisecond)
+		if err != nil {
+			log.Printf("failed to create watcher: %v", err)
+		} else {
+			ingestService := ingest.NewService(w, memoryService)
+			ingestService.Start(context.Background())
+			w.AddRecursive(cfg.Root)
+			log.Printf("Watcher started on %s", cfg.Root)
+		}
 
 		quit := make(chan os.Signal, 1)
 		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

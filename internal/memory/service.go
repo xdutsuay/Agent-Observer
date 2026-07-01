@@ -10,6 +10,7 @@ import (
 
 	"agent-memory-mcp/internal/app"
 	"agent-memory-mcp/internal/core"
+	"agent-memory-mcp/internal/projects"
 	"agent-memory-mcp/internal/store/sqlite"
 )
 
@@ -22,19 +23,16 @@ func NewService(store *sqlite.Store) app.MemoryService {
 }
 
 func (s *Service) ResolveRepo(path string) (string, error) {
-	// For simplicity in the port, if the path has a .git, we could hash it.
-	// We'll just use the basename of the directory for this minimal version,
-	// or fallback to 'default'. Python resolves upwards looking for .git.
-	p, err := filepath.Abs(path)
+	rootPath, err := projects.FindProjectRoot(path)
 	if err != nil {
-		p = path
+		rootPath = path
 	}
-	repoID := filepath.Base(p)
+	repoID := filepath.Base(rootPath)
 	if repoID == "." || repoID == "" {
 		repoID = "default"
 	}
 	
-	err = s.store.UpsertRepo(context.Background(), repoID, p)
+	err = s.store.UpsertRepo(context.Background(), repoID, rootPath)
 	return repoID, err
 }
 
