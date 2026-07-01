@@ -1,10 +1,10 @@
 # Agent Memory MCP
 
-**Local, repo-scoped memory for AI coding agents** — works with Cursor, Claude Code, Claude Desktop, Zed, or any MCP client.
+**Persistent, intelligent memory for AI coding agents** — works with Cursor, Claude Code, Claude Desktop, Windsurf, Zed, or any MCP client.
 
-Your agent forgets context between sessions. This project **remembers failures, decisions, and attempts per git repo**, watches your workspace passively, and exposes memory through **MCP tools** plus an **operator dashboard**.
+Your agent forgets everything between sessions. Agent Memory **remembers failures, decisions, and context per git repo**, learns which memories matter through relevance scoring, and surfaces the right context at the right time — automatically.
 
-> **No cloud required.** No API key required for core features. Data stays on your machine in SQLite.
+> **No cloud required.** Data stays on your machine in SQLite. SaaS version coming soon.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)]()
 [![MCP](https://img.shields.io/badge/MCP-compatible-green)]()
@@ -12,19 +12,33 @@ Your agent forgets context between sessions. This project **remembers failures, 
 
 ---
 
-## Why use this?
+## Dashboard
 
-| Problem | How Agent Memory helps |
-|--------|-------------------------|
-| Agent repeats the same mistake | Failures are captured from logs + `remember` and surfaced via `get_repo_context` |
-| Context lost between chats | MCP `search_memory` + `inject_memory_context` preload prior work |
-| No visibility into what agents actually use | **Agent Usage** page logs MCP/HTTP queries and responses |
-| Scattered notes across tools | One SQLite store per machine, scoped by git repo |
-| Vendor lock-in | Standard MCP stdio — not tied to a single IDE |
+![Agent Memory Dashboard](docs/screenshots/dashboard.png)
+
+*Real-time operator console — health scores, memory distribution, agent usage, failure hotspots, and MCP tool status.*
+
+![Memory Browser](docs/screenshots/memory.png)
+
+*Browse memories by workspace, view relevance scores, quality tiers, and give feedback to improve ranking.*
 
 ---
 
-## Quick start (5 minutes)
+## Why use this?
+
+| Problem | How Agent Memory solves it |
+|--------|---------------------------|
+| Agent repeats the same mistake | Failures are captured and surfaced automatically via relevance-ranked search |
+| Context lost between sessions | Smart Context API packs the most relevant memories into a token budget |
+| Search returns irrelevant results | Real semantic embeddings (384-dim) + blended scoring (semantic × relevance × recency) |
+| No way to tell the system what's useful | Thumbs up/down feedback loop — memories that help get ranked higher |
+| Noisy low-value memories pile up | Automatic noise classification demotes stale, never-accessed attempts |
+| No visibility into agent behavior | Operator dashboard with usage logs, health scores, and failure tracking |
+| Vendor lock-in | Standard MCP stdio — works with any IDE that supports MCP |
+
+---
+
+## Quick start
 
 ```bash
 git clone https://github.com/xdutsuay/Agent-Observer.git
@@ -37,75 +51,164 @@ pip install -e ".[dev]"
 ./scripts/start.sh
 ```
 
-Open **http://127.0.0.1:9000** — dashboard, memory browser, agent usage, disk usage.
+Open **http://127.0.0.1:9000** — dashboard, memory browser, cross-repo search, agent usage.
 
-`start.sh` creates the venv if needed, installs deps, builds the UI on first run, and starts the daemon with the filesystem watcher **on** by default.
+### Connect to your IDE
 
-### Connect to Cursor (recommended)
-
-1. Ensure `agent-memory` is on your PATH (venv activated), or use the full path to `.venv/bin/agent-memory`.
-2. Add to Cursor MCP settings (or copy [`mcp.json.example`](mcp.json.example)):
+Add to your MCP settings (Cursor, Claude Code, Claude Desktop, Windsurf):
 
 ```json
 {
   "mcpServers": {
     "agent-memory": {
       "command": "agent-memory",
-      "args": ["mcp", "--root", "~/agent_companion_data"],
-      "env": {
-        "AGENT_MEMORY_LLM_PROVIDER": "none"
-      }
+      "args": ["mcp", "--root", "~/agent_companion_data"]
     }
   }
 }
 ```
 
-3. Restart MCP in Cursor. Ask the agent to call `get_repo_context` or `search_memory` for your project path.
-
-### Connect to Claude Code / Claude Desktop
-
-Use the same MCP block above in your client's MCP config. The server speaks **stdio MCP** — no HTTP port needed for the agent integration.
+Restart MCP in your IDE. The agent now has access to 15 memory tools.
 
 ---
 
-## What you get
+## Features
 
-### MCP tools (agent-facing)
+### Relevance scoring
 
-| Tool | Use when |
-|------|----------|
-| `remember` | Store a failure, decision, attempt, fact, or preference |
-| `search_memory` | Find relevant past context for the current task |
-| `get_repo_context` | Bundle failures + decisions + attempts for a repo |
-| `inject_memory_context` | Prompt: preload memory before starting work |
-| `global_search` | Search across all tracked projects |
-| `list_projects` / `switch_project_context` | Multi-repo workspaces |
-| `find_similar_failures` / `failure_hotspots` | Cross-repo failure intelligence |
-| `mark_failure_resolved` / `forget` | Curate memory over time |
+Not all memories are equal. The system tracks how often each memory is accessed, whether it was useful (via feedback), and how recent it is. Search results blend three signals:
 
-### Operator dashboard (human-facing)
+```
+final_score = 0.45 × semantic_similarity + 0.30 × relevance_score + 0.25 × recency
+```
 
-| Page | Purpose |
+Memories that are frequently accessed and marked useful rise to the top. Stale, never-accessed attempts are automatically classified as noise and excluded from results.
+
+### Smart Context API
+
+Instead of dumping all memories, the Smart Context endpoint returns only what's relevant to your current task, packed into a token budget:
+
+```bash
+curl -X POST http://localhost:9000/api/v1/context/smart \
+  -H "Content-Type: application/json" \
+  -d '{"task": "Fix the auth timeout bug", "repo_id": "my-app", "max_tokens": 3000}'
+```
+
+Returns ranked memories + a ready-to-use system prompt fragment.
+
+### Feedback loop
+
+Agents (or humans) can report whether a memory was useful. This closes the loop — the system gets smarter over time:
+
+```bash
+curl -X POST http://localhost:9000/api/v1/feedback \
+  -d '{"memory_id": "abc123", "useful": true}'
+```
+
+### Real semantic search
+
+384-dimensional embeddings via `sentence-transformers` (all-MiniLM-L6-v2) with automatic fallback. The system auto-detects embedding dimension changes and reindexes on startup.
+
+### Noise classification
+
+Memories that have existed for 7+ days with zero accesses and kind `attempt` are automatically demoted to `noise` tier and excluded from search. They stay in the DB for audit but stop polluting results.
+
+---
+
+## MCP Tools (15 active)
+
+### Core tools
+
+| Tool | Purpose |
 |------|---------|
-| **Dashboard** | Health, activity, projects, disk + usage summaries |
-| **Projects** | Auto-discovered git repos under `~/localcode` |
-| **Memory** | Browse and search stored memories |
-| **Agent Usage** | Which IDE connected, what was queried, what was returned |
-| **Configuration** | Live daemon config + disk breakdown |
-| **Timeline / Patterns** | Events and failure trends |
+| `remember` | Store a failure, decision, attempt, fact, or preference |
+| `search_memory` | Semantic + keyword search with relevance-blended ranking |
+| `get_repo_context` | Load failures + decisions + facts for a project at session start |
+| `global_search` | Search across all tracked projects |
+| `list_projects` | All tracked projects with metadata |
+| `switch_project_context` | Full project context bundle |
+| `get_pattern_report` | Health scores, trends, error categories |
+| `get_related_memories` | Find related by content or time |
+| `find_similar_failures` | Cross-project failure matching |
+| `failure_hotspots` | Projects with the most unresolved failures |
+| `mark_failure_resolved` | Resolve failure signatures |
+| `forget` | Soft-delete memories |
 
-### Passive watcher (zero agent effort)
+### Intelligence tools (new in v0.5)
 
-With the daemon running, the watcher observes configured paths, ingests log errors into **failures** and code churn into **attempts** — no manual note-taking.
+| Tool | Purpose |
+|------|---------|
+| `smart_context` | Task-specific memory retrieval with token budgeting |
+| `memory_feedback` | Report if a memory was useful (closes the feedback loop) |
+| `refresh_relevance` | Recompute all relevance scores + classify noise |
 
 ---
 
-## Requirements
+## Operator Dashboard
 
-- **Python 3.10+**
-- **Node.js 18+** (only to build the UI; `start.sh` handles this)
-- **macOS / Linux** recommended (`du` used for workspace disk sizing)
-- **Optional:** OpenAI, Anthropic, or NVIDIA NIM API key for background fact extraction
+| Page | What it shows |
+|------|---------------|
+| **Dashboard** | Health score, memory stats, activity stream, failure hotspots, MCP tool status |
+| **Projects** | Auto-discovered git repos with language/framework detection |
+| **Memory** | Browse memories with relevance bars, quality tiers, feedback buttons |
+| **Search** | Cross-repo search + Smart Context tab with copyable prompt fragments |
+| **Patterns** | Recurring failures, error categories, health trends |
+| **Timeline** | Real-time event stream |
+| **Agent Usage** | Which IDE connected, what was queried, what was returned |
+| **Config** | Live daemon config + disk breakdown |
+
+---
+
+## HTTP API
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/status` | GET | Server status, repo count |
+| `/api/memories` | GET | List memory records |
+| `/api/search` | POST | Hybrid search (single repo) |
+| `/api/search/global` | POST | Cross-repo search |
+| `/api/v1/context/smart` | POST | **Smart context with token budget** |
+| `/api/v1/feedback` | POST | **Memory feedback (useful/not useful)** |
+| `/api/v1/relevance/refresh` | POST | **Recompute relevance scores** |
+| `/api/v1/context/generate` | POST | **Generate IDE context file** |
+| `/api/patterns` | GET | Health score + error trends |
+| `/api/usage/summary` | GET | Agent adoption metrics |
+| `/api/disk-usage` | GET | Storage per project |
+| `/ws/events` | WS | Real-time timeline events |
+
+Full OpenAPI docs at **http://localhost:9000/docs** when the server is running.
+
+---
+
+## Architecture
+
+```
+IDE (Cursor / Claude Code / Windsurf / …)
+        │ MCP stdio
+        ▼
+┌─────────────────────────────────────────────────┐
+│  agent-memory                                   │
+│  ┌─────────────┐  ┌──────────────────────────┐ │
+│  │ MCP server  │  │ FastAPI + React dashboard │ │
+│  │ (15 tools)  │  │ (9 pages)                │ │
+│  └──────┬──────┘  └────────────┬─────────────┘ │
+│         │                      │                │
+│         └──────────┬───────────┘                │
+│                    ▼                            │
+│  Storage → SQLite (FTS5 + 384-dim vectors)      │
+│              ├── memory_access_log (tracking)   │
+│              ├── relevance scoring              │
+│              └── noise classification           │
+│                    ▲                            │
+│  Filesystem watcher (watchdog) ─────────────── │
+└─────────────────────────────────────────────────┘
+        │
+        ▼
+~/agent_companion_data/
+  ├── memory.db    (memories, embeddings, access logs)
+  ├── usage.db     (agent interaction log)
+  └── repos.json   (repo id → path map)
+```
 
 ---
 
@@ -115,14 +218,12 @@ With the daemon running, the watcher observes configured paths, ingests log erro
 # Core + tests
 pip install -e ".[dev]"
 
-# Optional LLM extraction
-pip install -e ".[llm]"
-
-# Optional better local embeddings
+# With real embeddings (recommended)
 pip install -e ".[embeddings]"
-```
 
----
+# With LLM extraction
+pip install -e ".[llm]"
+```
 
 ## Run modes
 
@@ -134,13 +235,6 @@ pip install -e ".[embeddings]"
 ./scripts/start.sh --port 8080  # Custom port
 ```
 
-Manual equivalent:
-
-```bash
-agent-memory serve --root ~/agent_companion_data --ui --port 9000
-agent-memory mcp --root ~/agent_companion_data
-```
-
 ---
 
 ## Environment variables
@@ -148,83 +242,48 @@ agent-memory mcp --root ~/agent_companion_data
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `AGENT_MEMORY_LLM_PROVIDER` | `none` | `openai`, `anthropic`, `nvidia`, or `none` |
-| `AGENT_MEMORY_USE_HERMES_AUTH` | `1` | When `nvidia`, read key from `~/.hermes/auth.json` if unset |
-| `AGENT_MEMORY_NVIDIA_API_KEY` | — | NVIDIA NIM key |
 | `AGENT_MEMORY_DATA_ROOT` | `~/agent_companion_data` | SQLite + config location |
-| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | — | For optional extraction |
+| `AGENT_MEMORY_EMBED_PROVIDER` | auto-detect | `local`, `openai`, or `hash` |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | — | For optional extraction / API embeddings |
 
-**LLM is optional.** Watcher, MCP, search, and dashboard work without any API key.
-
----
-
-## Data on disk
-
-```
-~/agent_companion_data/
-  memory.db       # Memories, FTS5 search, embeddings
-  usage.db        # Agent usage / MCP interaction log
-  repos.json      # repo id → path map
-  agent-memory/   # Legacy markdown (migrated once)
-```
-
-**Disk usage API:** `GET /api/disk-usage` — per-project memory size and workspace size.
+**LLM is optional.** All core features (memory, search, relevance, dashboard) work without any API key.
 
 ---
 
-## HTTP API (integrations)
+## Requirements
 
-| Endpoint | Purpose |
-|----------|---------|
-| `GET /api/status` | Watcher, repo count, LLM provider |
-| `GET /api/memories` | List memory records |
-| `POST /api/search` | Hybrid search |
-| `GET /api/usage/summary` | Agent adoption metrics |
-| `GET /api/usage/interactions` | Query/response audit log |
-| `GET /api/disk-usage` | Storage per project + overall |
-| `WS /ws/events` | Real-time timeline events |
-
-Full OpenAPI docs when the daemon is running: **http://127.0.0.1:9000/docs**
+- **Python 3.10+**
+- **Node.js 18+** (only to build the UI; `start.sh` handles this)
+- **macOS / Linux** recommended
 
 ---
 
-## Architecture
+## Roadmap
 
-```
-IDE (Cursor / Claude Code / …)
-        │ MCP stdio
-        ▼
-┌───────────────────────────────────────────┐
-│  agent-memory                             │
-│  ┌─────────────┐  ┌──────────────────┐  │
-│  │ MCP server  │  │ FastAPI + UI     │  │
-│  └──────┬──────┘  └────────┬─────────┘  │
-│         │                  │              │
-│         └────────┬─────────┘              │
-│                  ▼                        │
-│         Storage → SQLite (FTS5 + vectors) │
-│                  ▲                        │
-│         Filesystem watcher (watchdog)     │
-└───────────────────────────────────────────┘
-        │
-        ▼
-~/agent_companion_data/
-```
+### Shipped (v0.5.0)
 
----
+- [x] Relevance scoring with access tracking + time decay
+- [x] Memory feedback loop (thumbs up/down)
+- [x] Smart Context API with token budgeting
+- [x] Automatic noise classification
+- [x] Real 384-dim semantic embeddings wired by default
+- [x] Auto-reindex on embedding dimension change
+- [x] Context file generation for IDE auto-injection
+- [x] Dashboard UI with relevance bars, quality tiers, feedback buttons
+- [x] Cross-repo search with blended scoring
+- [x] 15 MCP tools (up from 12)
 
-## Adoption checklist
+### Coming next — SaaS (v1.0)
 
-- [ ] Run `./scripts/start.sh` and confirm **http://127.0.0.1:9000/api/status** shows `running: true`
-- [ ] Add MCP config to your IDE and verify tools appear
-- [ ] Open a repo under `~/localcode` (or your watch paths) — it should appear in **Projects**
-- [ ] Call `remember` or `search_memory` from an agent — check **Agent Usage** for the log entry
-- [ ] (Optional) Set `AGENT_MEMORY_LLM_PROVIDER` for automatic fact extraction
+- [ ] **Multi-tenancy** — per-org databases via Turso (libSQL), connection provider abstraction
+- [ ] **Auth** — signup/login, JWT, API key generation for MCP/CLI
+- [ ] **Cloud MCP proxy** — HTTP/SSE transport so any MCP client can connect remotely
+- [ ] **Ingestion API** — structured event push from CI/CD, replacing the noisy file watcher
+- [ ] **Memory distillation** — LLM pass to merge duplicates, extract facts from attempts, auto-tag
+- [ ] **Team features** — shared project memories, attribution, access control, review queue
+- [ ] **Billing** — Stripe integration, free/pro/team tiers
 
----
-
-## Cursor hook (optional)
-
-See [`docs/cursor-hook.example.json`](docs/cursor-hook.example.json) to POST memory after file edits. MCP `remember` is simpler when the agent is already connected.
+See [`docs/ENHANCEMENT_AND_SAAS_ROADMAP.md`](docs/ENHANCEMENT_AND_SAAS_ROADMAP.md) for the full spec.
 
 ---
 
