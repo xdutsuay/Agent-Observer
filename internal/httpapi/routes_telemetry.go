@@ -50,11 +50,23 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDiskUsage(w http.ResponseWriter, r *http.Request) {
-	// Stub for disk usage
 	respondJSON(w, map[string]any{
-		"total_bytes": 0,
-		"memory_db_bytes": 0,
-		"usage_db_bytes": 0,
+		"data_root": "",
+		"overall": map[string]any{
+			"data_root_bytes":                0,
+			"data_root_bytes_human":          "0 B",
+			"memory_db_bytes":                0,
+			"usage_db_bytes":                 0,
+			"legacy_markdown_bytes":          0,
+			"total_memory_attributed_bytes":  0,
+			"total_memory_attributed_human":  "0 B",
+			"total_workspace_bytes":          0,
+			"total_workspace_human":          "0 B",
+			"project_count":                  0,
+		},
+		"breakdown":       map[string]int{},
+		"breakdown_human": map[string]string{},
+		"projects":        []any{},
 	})
 }
 
