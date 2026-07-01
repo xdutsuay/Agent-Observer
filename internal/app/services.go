@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 
+	"time"
 	"agent-memory-mcp/internal/core"
 )
 
@@ -30,7 +31,11 @@ type SearchService interface {
 	Search(ctx context.Context, query string, repoID *string, kinds []string, limit int) ([]core.Memory, error)
 }
 
-type SessionService interface{}
+type SessionService interface {
+	GetIndexState(ctx context.Context, filePath string) (time.Time, error)
+	UpdateIndexState(ctx context.Context, filePath string, mtime time.Time, turns []core.SessionTurn) error
+	SearchSessions(ctx context.Context, query string, limit int) ([]core.SessionTurn, error)
+}
 
 type UsageService interface {
 	Record(ctx context.Context, transport, method string, query map[string]any, responsePreview, clientName, clientVersion, hostIDE string, durationMS float64, ok bool) error

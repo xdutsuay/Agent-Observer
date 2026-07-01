@@ -60,3 +60,24 @@ CREATE INDEX IF NOT EXISTS idx_access_log_memory
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
     content, kind, repo_id
 );
+
+CREATE TABLE IF NOT EXISTS session_turns (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    turn_number INTEGER NOT NULL,
+    user_input TEXT NOT NULL,
+    agent_response TEXT NOT NULL,
+    timestamp TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_turns_session 
+    ON session_turns(session_id, turn_number);
+
+CREATE TABLE IF NOT EXISTS index_state (
+    file_path TEXT PRIMARY KEY,
+    last_modified TEXT NOT NULL
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS session_turns_fts USING fts5(
+    user_input, agent_response
+);

@@ -351,6 +351,30 @@ func (s *Server) handleInjectMemoryContext(ctx context.Context, request mcp.GetP
 					Text: body,
 				},
 			},
+			Name:        "promote_session",
+			Description: "Promotes a session turn into a permanent memory (decision, fact, preference).",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"repo_id": map[string]any{
+						"type":        "string",
+						"description": "Target repository ID.",
+					},
+					"turn_id": map[string]any{
+						"type":        "string",
+						"description": "ID of the session turn to promote.",
+					},
+					"kind": map[string]any{
+						"type":        "string",
+						"description": "Kind of memory (decision, fact, preference).",
+					},
+					"content": map[string]any{
+						"type":        "string",
+						"description": "The exact content to store.",
+					},
+				},
+				"required": []string{"repo_id", "turn_id", "kind", "content"},
+			},
 		},
 	}, nil
 }

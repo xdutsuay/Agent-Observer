@@ -1,5 +1,7 @@
 package core
 
+import "time"
+
 type Memory struct {
 	ID             string                 `json:"id"`
 	RepoID         string                 `json:"repo_id"`
@@ -94,4 +96,20 @@ type UsageSummary struct {
 	ByHostIDE         []CountByName `json:"by_host_ide"`
 	ByTransport       []CountByName `json:"by_transport"`
 	RunningIDEs       []RunningIDE `json:"running_ides"`
+}
+
+// SessionTurn represents a single back-and-forth interaction between the user and an agent.
+type SessionTurn struct {
+	ID            string    `json:"id"`
+	SessionID     string    `json:"session_id"`
+	TurnNumber    int       `json:"turn_number"`
+	UserInput     string    `json:"user_input"`
+	AgentResponse string    `json:"agent_response"`
+	Timestamp     time.Time `json:"timestamp"`
+}
+
+// IndexState tracks the last modified time of a transcript file.
+type IndexState struct {
+	FilePath     string    `json:"file_path"`
+	LastModified time.Time `json:"last_modified"`
 }

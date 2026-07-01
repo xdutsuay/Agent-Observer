@@ -45,6 +45,22 @@ func (m *mockMemoryService) GenerateContextFile(ctx context.Context, repoID stri
 func (m *mockMemoryService) BuildContextFile(ctx context.Context, repoID string, projectPath string) (string, error) {
 	return "", nil
 }
+
+func (m *mockMemoryService) GlobalSearch(ctx context.Context, query string, kinds []string, limit int) ([]core.Memory, error) {
+	return nil, nil
+}
+func (m *mockMemoryService) GetPatternReport(ctx context.Context, repoID *string) (map[string]any, error) {
+	return nil, nil
+}
+func (m *mockMemoryService) FailureHotspots(ctx context.Context, limit int) ([]map[string]any, error) {
+	return nil, nil
+}
+func (m *mockMemoryService) GetRelatedMemories(ctx context.Context, memoryID string, limit int) ([]core.Memory, error) {
+	return nil, nil
+}
+func (m *mockMemoryService) RecordFeedback(ctx context.Context, memoryID string, useful bool, comment string) error {
+	return nil
+}
 func (m *mockMemoryService) SmartContext(ctx context.Context, repoID, task string, maxTokens int) (core.SmartContext, error) {
 	return core.SmartContext{}, nil
 }
