@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"agent-memory-mcp/internal/app"
@@ -22,27 +21,21 @@ func NewServer(ms app.MemoryService, us app.UsageService) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		respondJSON(w, map[string]string{"status": "ok"})
 	})
 
-	mux.HandleFunc("/api/memories", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		
-		repoID := r.URL.Query().Get("repo_id")
-		var rID *string
-		if repoID != "" {
-			rID = &repoID
-		}
+	s.registerMemoryRoutes(mux)
+	s.registerIntelligenceRoutes(mux)
+	s.registerTelemetryRoutes(mux)
+	s.registerWsRoutes(mux)
 
-		mems, err := s.memoryService.ListMemories(r.Context(), rID, nil, 50)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		
-		json.NewEncoder(w).Encode(map[string]any{"memories": mems})
+	// Fallback for static UI
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		// Just returning a simple response for now.
+		// In a real build, we'd serve the React bundle here.
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte("<html><body><h1>Agent Memory MCP Go Port</h1><p>API is running.</p></body></html>"))
 	})
 
 	return mux

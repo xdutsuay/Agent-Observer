@@ -19,6 +19,11 @@ type MemoryService interface {
 	GenerateContextFile(ctx context.Context, repoID string, projectPath string) error
 	BuildContextFile(ctx context.Context, repoID string, projectPath string) (string, error)
 	SmartContext(ctx context.Context, repoID, task string, maxTokens int) (core.SmartContext, error)
+	GlobalSearch(ctx context.Context, query string, kinds []string, limit int) ([]core.Memory, error)
+	GetPatternReport(ctx context.Context, repoID *string) (map[string]any, error)
+	FailureHotspots(ctx context.Context, limit int) ([]map[string]any, error)
+	GetRelatedMemories(ctx context.Context, memoryID string, limit int) ([]core.Memory, error)
+	RecordFeedback(ctx context.Context, memoryID string, useful bool, comment string) error
 }
 
 type SearchService interface {

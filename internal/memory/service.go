@@ -143,3 +143,23 @@ func (s *Service) SmartContext(ctx context.Context, repoID, task string, maxToke
 		SystemPromptFragment: "Injected context summary.",
 	}, nil
 }
+
+func (s *Service) GlobalSearch(ctx context.Context, query string, kinds []string, limit int) ([]core.Memory, error) {
+	return s.store.GlobalSearch(ctx, query, kinds, limit)
+}
+
+func (s *Service) GetPatternReport(ctx context.Context, repoID *string) (map[string]any, error) {
+	return s.store.GetPatternReport(ctx, repoID)
+}
+
+func (s *Service) FailureHotspots(ctx context.Context, limit int) ([]map[string]any, error) {
+	return s.store.FailureHotspots(ctx, limit)
+}
+
+func (s *Service) GetRelatedMemories(ctx context.Context, memoryID string, limit int) ([]core.Memory, error) {
+	return s.store.GetRelatedMemories(ctx, memoryID, limit)
+}
+
+func (s *Service) RecordFeedback(ctx context.Context, memoryID string, useful bool, comment string) error {
+	return s.store.RecordFeedback(ctx, memoryID, useful, comment)
+}
