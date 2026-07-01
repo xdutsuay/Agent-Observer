@@ -229,6 +229,40 @@ func (s *Server) handleRefreshRelevance(ctx context.Context, request mcp.CallToo
 	return result, nil
 }
 
+func (s *Server) handlePromoteSession(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	start := time.Now()
+	args, _ := request.Params.Arguments.(map[string]interface{})
+	var err error
+	var result *mcp.CallToolResult
+
+	defer func() {
+		respText := ""
+		if result != nil && len(result.Content) > 0 {
+			if tc, ok := result.Content[0].(mcp.TextContent); ok {
+				respText = tc.Text
+			}
+		}
+		s.logUsage(ctx, "promote_session", args, respText, err, start)
+	}()
+
+	repoID, _ := args["repo_id"].(string)
+	turnID, _ := args["turn_id"].(string)
+	kind, _ := args["kind"].(string)
+	content, _ := args["content"].(string)
+
+	meta := map[string]any{
+		"promoted_from_turn": turnID,
+	}
+
+	id, _, err := s.memorySvc.Remember(repoID, kind, content, "session_promotion", meta)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	result = mcp.NewToolResultText(fmt.Sprintf("Promoted session turn %s into memory %s", turnID, id))
+	return result, nil
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

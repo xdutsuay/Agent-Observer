@@ -65,6 +65,14 @@ func (s *Server) registerTools() {
 		mcp.WithNumber("limit", mcp.Description("Limit of results (default 10)")),
 	), s.handleSearchMemory)
 
+	s.mcpServer.AddTool(mcp.NewTool("promote_session",
+		mcp.WithDescription("Promotes a session turn into a permanent memory (decision, fact, preference)."),
+		mcp.WithString("repo_id", mcp.Required(), mcp.Description("Target repository ID.")),
+		mcp.WithString("turn_id", mcp.Required(), mcp.Description("ID of the session turn to promote.")),
+		mcp.WithString("kind", mcp.Required(), mcp.Description("Kind of memory (decision, fact, preference).")),
+		mcp.WithString("content", mcp.Required(), mcp.Description("The exact content to store.")),
+	), s.handlePromoteSession)
+
 	s.mcpServer.AddTool(mcp.NewTool("get_repo_context",
 		mcp.WithDescription("Get failures, decisions, facts, and recent attempts for a project."),
 		mcp.WithString("path", mcp.Required(), mcp.Description("Project path")),
@@ -350,30 +358,6 @@ func (s *Server) handleInjectMemoryContext(ctx context.Context, request mcp.GetP
 					Type: "text",
 					Text: body,
 				},
-			},
-			Name:        "promote_session",
-			Description: "Promotes a session turn into a permanent memory (decision, fact, preference).",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"repo_id": map[string]any{
-						"type":        "string",
-						"description": "Target repository ID.",
-					},
-					"turn_id": map[string]any{
-						"type":        "string",
-						"description": "ID of the session turn to promote.",
-					},
-					"kind": map[string]any{
-						"type":        "string",
-						"description": "Kind of memory (decision, fact, preference).",
-					},
-					"content": map[string]any{
-						"type":        "string",
-						"description": "The exact content to store.",
-					},
-				},
-				"required": []string{"repo_id", "turn_id", "kind", "content"},
 			},
 		},
 	}, nil
