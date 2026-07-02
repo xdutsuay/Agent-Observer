@@ -105,7 +105,10 @@ func (s *Store) Search(ctx context.Context, query string, repoID *string, kinds 
 	ftsSQL += " ORDER BY rank LIMIT ?"
 	args = append(args, limit*2)
 
-	rows, _ := s.memoryDB.QueryContext(ctx, ftsSQL, args...)
+	rows, err := s.memoryDB.QueryContext(ctx, ftsSQL, args...)
+	if err != nil {
+		return nil, err
+	}
 	if rows != nil {
 		for rows.Next() {
 			var m core.Memory
@@ -145,7 +148,10 @@ func (s *Store) Search(ctx context.Context, query string, repoID *string, kinds 
 	vecSQL += " ORDER BY m.created_at DESC LIMIT ?"
 	vecArgs = append(vecArgs, limit*5)
 
-	vRows, _ := s.memoryDB.QueryContext(ctx, vecSQL, vecArgs...)
+	vRows, err := s.memoryDB.QueryContext(ctx, vecSQL, vecArgs...)
+	if err != nil {
+		return nil, err
+	}
 	if vRows != nil {
 		for vRows.Next() {
 			var m core.Memory

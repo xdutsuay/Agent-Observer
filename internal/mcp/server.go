@@ -12,18 +12,22 @@ import (
 )
 
 type Server struct {
-	mcpServer *server.MCPServer
-	memorySvc app.MemoryService
-	usageSvc  app.UsageService
+	mcpServer  *server.MCPServer
+	memorySvc  app.MemoryService
+	usageSvc   app.UsageService
+	sessionSvc app.SessionService
 }
 
-func NewServer(ms app.MemoryService, us app.UsageService) *Server {
+func NewServer(ms app.MemoryService, us app.UsageService, ss ...app.SessionService) *Server {
 	s := server.NewMCPServer("agent-memory", "1.0.0")
 
 	srv := &Server{
 		mcpServer: s,
 		memorySvc: ms,
 		usageSvc:  us,
+	}
+	if len(ss) > 0 && ss[0] != nil {
+		srv.sessionSvc = ss[0]
 	}
 
 	srv.registerTools()
@@ -179,7 +183,7 @@ func (s *Server) handleSearchMemory(ctx context.Context, request mcp.CallToolReq
 
 	var text string
 	for i, m := range mems {
-		score := 0.0
+		score := m.Score
 		// the store search returns core.Memory which doesn't directly expose search score currently, 
 		// but we'll format it with what we have.
 		text += fmt.Sprintf("[%0.2f] (%s) %s\n%s\n", score, m.Kind, m.CreatedAt, m.Content)

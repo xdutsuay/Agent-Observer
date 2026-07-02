@@ -3,7 +3,6 @@ package sqlite
 import (
 	"context"
 	"encoding/json"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -25,11 +24,11 @@ func RunLegacyMigration(ctx context.Context, s *Store, root string) error {
 
 	reposMapPath := filepath.Join(root, "repos.json")
 	reposMap := make(map[string]string)
-	if b, err := ioutil.ReadFile(reposMapPath); err == nil {
+	if b, err := os.ReadFile(reposMapPath); err == nil {
 		json.Unmarshal(b, &reposMap)
 	}
 
-	entries, err := ioutil.ReadDir(memoryDir)
+	entries, err := os.ReadDir(memoryDir)
 	if err != nil {
 		return err
 	}
@@ -59,7 +58,7 @@ func RunLegacyMigration(ctx context.Context, s *Store, root string) error {
 
 		for file, kind := range kinds {
 			fpath := filepath.Join(memPath, file)
-			b, err := ioutil.ReadFile(fpath)
+			b, err := os.ReadFile(fpath)
 			if err != nil {
 				continue
 			}
@@ -78,7 +77,7 @@ func RunLegacyMigration(ctx context.Context, s *Store, root string) error {
 		}
 
 		statePath := filepath.Join(memPath, "state.json")
-		if b, err := ioutil.ReadFile(statePath); err == nil {
+		if b, err := os.ReadFile(statePath); err == nil {
 			var state map[string]any
 			if json.Unmarshal(b, &state) == nil {
 				if fa, ok := state["failure_analytics"].(map[string]any); ok {
@@ -106,7 +105,7 @@ func RunLegacyMigration(ctx context.Context, s *Store, root string) error {
 	}
 
 	if imported > 0 || len(entries) > 0 {
-		ioutil.WriteFile(markerPath, []byte("ok"), 0644)
+		os.WriteFile(markerPath, []byte("ok"), 0644)
 	}
 
 	return nil

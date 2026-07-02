@@ -24,7 +24,10 @@ type MemoryService interface {
 	GetPatternReport(ctx context.Context, repoID *string) (map[string]any, error)
 	FailureHotspots(ctx context.Context, limit int) ([]map[string]any, error)
 	GetRelatedMemories(ctx context.Context, memoryID string, limit int) ([]core.Memory, error)
+	FindSimilarFailures(ctx context.Context, repoID string, limit int) ([]core.Memory, error)
 	RecordFeedback(ctx context.Context, memoryID string, useful bool, comment string) error
+	Export(ctx context.Context, repoID *string) ([]core.Memory, error)
+	Import(ctx context.Context, memories []core.Memory) (int, error)
 }
 
 type SearchService interface {
@@ -44,4 +47,7 @@ type UsageService interface {
 	Summary(ctx context.Context) (core.UsageSummary, error)
 }
 
-type WatcherService interface{}
+type WatcherService interface {
+	Start(ctx context.Context, repoID string) error
+	Stop(ctx context.Context, repoID string) error
+}

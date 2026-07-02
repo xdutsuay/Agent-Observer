@@ -16,10 +16,8 @@ import (
 	"agent-memory-mcp/internal/ingest/watcher"
 	"agent-memory-mcp/internal/jobs"
 	"agent-memory-mcp/internal/mcp"
-	"agent-memory-mcp/internal/memory"
 	"agent-memory-mcp/internal/patterns"
-	"agent-memory-mcp/internal/store/sqlite"
-	"agent-memory-mcp/internal/usage"
+	"agent-memory-mcp/internal/tenant"
 )
 
 func main() {
@@ -33,24 +31,17 @@ func main() {
 
 	log.Printf("Starting agent-memory (cmd=%s, root=%s)", cmd, cfg.Root)
 
-	store, err := sqlite.Open(cfg.Root)
-	if err != nil {
-		log.Fatalf("Failed to open store: %v", err)
-	}
-	defer store.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := sqlite.RunLegacyMigration(ctx, store, cfg.Root); err != nil {
-		log.Printf("Legacy migration error: %v", err)
-	}
-	cancel()
-
-	memoryService := memory.NewService(store)
-	usageService := usage.NewService(store)
+	tm := tenant.NewTenantManager(cfg.Root)
+	defer tm.CloseAll()
 
 	switch cmd {
 	case "serve":
-		server := httpapi.NewServer(memoryService, usageService)
+		localTs, err := tm.Get("local")
+		if err != nil {
+			log.Fatalf("Failed to initialize local tenant: %v", err)
+		}
+
+		server := httpapi.NewServer(tm, cfg)
 		srv := &http.Server{
 			Addr:    cfg.HTTPAddr,
 			Handler: server.Handler(),
@@ -67,15 +58,15 @@ func main() {
 		if err != nil {
 			log.Printf("failed to create watcher: %v", err)
 		} else {
-			ingestService := ingest.NewService(w, memoryService)
+			ingestService := ingest.NewService(w, localTs.MemoryService)
 			ingestService.Start(context.Background())
 			w.AddRecursive(cfg.Root)
 			log.Printf("Watcher started on %s", cfg.Root)
 		}
 
 		// Start background intelligence jobs
-		detector := patterns.NewDetector(store)
-		jobRunner := jobs.NewRunner(store, detector)
+		detector := patterns.NewDetector(localTs.Store)
+		jobRunner := jobs.NewRunner(localTs.Store, detector, localTs.Store)
 		jobRunner.Start(context.Background())
 
 		quit := make(chan os.Signal, 1)
@@ -92,14 +83,23 @@ func main() {
 		}
 		
 	case "mcp":
-		mcpServer := mcp.NewServer(memoryService, usageService)
+		localTs, err := tm.Get("local")
+		if err != nil {
+			log.Fatalf("Failed to initialize local tenant: %v", err)
+		}
+		// Pass SessionService (Store implements it) so recall_sessions/list_sessions tools are available
+		mcpServer := mcp.NewServer(localTs.MemoryService, localTs.UsageService, localTs.Store)
 		if err := mcpServer.ServeStdio(); err != nil {
 			log.Fatalf("MCP Server error: %v", err)
 		}
 
 	case "refresh-relevance":
+		localTs, err := tm.Get("local")
+		if err != nil {
+			log.Fatalf("Failed to initialize local tenant: %v", err)
+		}
 		ctx := context.Background()
-		c1, c2, err := memoryService.RefreshRelevance(ctx, nil)
+		c1, c2, err := localTs.MemoryService.RefreshRelevance(ctx, nil)
 		if err != nil {
 			log.Fatalf("Refresh error: %v", err)
 		}

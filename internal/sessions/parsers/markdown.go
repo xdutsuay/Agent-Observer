@@ -2,6 +2,7 @@ package parsers
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,7 +42,7 @@ func ParseMarkdown(sessionID, content string, mtime time.Time) []core.SessionTur
 		} else if currentRole == "agent" {
 			turns = append(turns, core.SessionTurn{
 				// Generate a deterministic pseudo-ID based on session and turn
-				ID:            sessionID + "_turn_" + string(rune(len(turns))),
+				ID:            sessionID + "_turn_" + strconv.Itoa(len(turns)),
 				SessionID:     sessionID,
 				TurnNumber:    len(turns) + 1,
 				UserInput:     pendingInput,

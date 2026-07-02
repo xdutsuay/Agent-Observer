@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -37,9 +38,54 @@ func (s *Server) registerMoreTools() {
 		mcp.WithString("path", mcp.Description("Project path")),
 	), s.handleRefreshRelevance)
 
-	// Note: global_search, find_similar_failures, get_related_memories, get_pattern_report,
-	// failure_hotspots, memory_feedback are omitted for brevity in this foundational port,
-	// but can be stubbed or fully implemented if the Service layer supports them.
+	s.mcpServer.AddTool(mcp.NewTool("global_search",
+		mcp.WithDescription("Search across all repos globally."),
+		mcp.WithString("query", mcp.Required(), mcp.Description("Search query")),
+		mcp.WithNumber("limit", mcp.Description("Limit of results (default 10)")),
+	), s.handleGlobalSearch)
+
+	s.mcpServer.AddTool(mcp.NewTool("failure_hotspots",
+		mcp.WithDescription("Get the repositories with the most unresolved failures."),
+		mcp.WithNumber("limit", mcp.Description("Limit of results (default 10)")),
+	), s.handleFailureHotspots)
+
+	s.mcpServer.AddTool(mcp.NewTool("memory_feedback",
+		mcp.WithDescription("Record feedback on a memory to improve its relevance score."),
+		mcp.WithString("memory_id", mcp.Required(), mcp.Description("Memory ID")),
+		mcp.WithBoolean("useful", mcp.Required(), mcp.Description("Whether the memory was useful")),
+		mcp.WithString("comment", mcp.Description("Optional comment explaining why")),
+	), s.handleMemoryFeedback)
+
+	s.mcpServer.AddTool(mcp.NewTool("get_pattern_report",
+		mcp.WithDescription("Get a report of failure patterns and health score for a project."),
+		mcp.WithString("path", mcp.Description("Optional project path. If omitted, global report.")),
+	), s.handleGetPatternReport)
+
+	s.mcpServer.AddTool(mcp.NewTool("get_related_memories",
+		mcp.WithDescription("Find other memories that are semantically similar to a given memory."),
+		mcp.WithString("memory_id", mcp.Required(), mcp.Description("Memory ID")),
+		mcp.WithNumber("limit", mcp.Description("Limit of results (default 5)")),
+	), s.handleGetRelatedMemories)
+
+	s.mcpServer.AddTool(mcp.NewTool("find_similar_failures",
+		mcp.WithDescription("Find failures in other repositories similar to failures in this one."),
+		mcp.WithString("path", mcp.Required(), mcp.Description("Project path")),
+		mcp.WithNumber("limit", mcp.Description("Limit of results (default 5)")),
+	), s.handleFindSimilarFailures)
+
+	// Session recall tools — search past Claude Code, Codex, and Cursor transcripts
+	if s.sessionSvc != nil {
+		s.mcpServer.AddTool(mcp.NewTool("recall_sessions",
+			mcp.WithDescription("Search past session transcripts from Claude Code, Codex, and Cursor. Find what was discussed or tried in previous coding sessions."),
+			mcp.WithString("query", mcp.Required(), mcp.Description("Search query — what you're looking for in past sessions")),
+			mcp.WithNumber("limit", mcp.Description("Maximum results (default 10)")),
+		), s.handleRecallSessions)
+
+		s.mcpServer.AddTool(mcp.NewTool("list_sessions",
+			mcp.WithDescription("List recently indexed session transcripts from Claude Code, Codex, and Cursor."),
+			mcp.WithNumber("limit", mcp.Description("Maximum sessions to list (default 20)")),
+		), s.handleListSessions)
+	}
 }
 
 func (s *Server) handleAddMemory(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -187,7 +233,7 @@ func (s *Server) handleSmartContext(ctx context.Context, request mcp.CallToolReq
 	}
 
 	text := fmt.Sprintf("## Smart Context for: %s\nProject: %s | %d memories | ~%d tokens\n\n",
-		task[:min(len(task), 100)], repoID, len(sc.Memories), sc.TokenEstimate)
+		task[:minInt(len(task), 100)], repoID, len(sc.Memories), sc.TokenEstimate)
 	
 	for _, m := range sc.Memories {
 		text += fmt.Sprintf("### [%s] (relevance: ?)\n%s\n\n", m.Kind, m.Content)
@@ -263,9 +309,365 @@ func (s *Server) handlePromoteSession(ctx context.Context, request mcp.CallToolR
 	return result, nil
 }
 
-func min(a, b int) int {
+func minInt(a, b int) int {
 	if a < b {
 		return a
 	}
 	return b
+}
+
+func (s *Server) handleGlobalSearch(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	start := time.Now()
+	args, _ := request.Params.Arguments.(map[string]interface{})
+	var result *mcp.CallToolResult
+	var err error
+
+	defer func() {
+		respText := ""
+		if result != nil && len(result.Content) > 0 {
+			if tc, ok := result.Content[0].(mcp.TextContent); ok {
+				respText = tc.Text
+			}
+		}
+		s.logUsage(ctx, "global_search", args, respText, err, start)
+	}()
+
+	query, _ := args["query"].(string)
+	limit := 10
+	if lim, ok := args["limit"].(float64); ok {
+		limit = int(lim)
+	}
+
+	mems, err := s.memorySvc.GlobalSearch(ctx, query, nil, limit)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	if len(mems) == 0 {
+		result = mcp.NewToolResultText("No memories found.")
+		return result, nil
+	}
+
+	var text string
+	for i, m := range mems {
+		text += fmt.Sprintf("[%0.2f] (%s) [%s] %s\n%s\n", m.Score, m.RepoID, m.Kind, m.CreatedAt, m.Content)
+		if i < len(mems)-1 {
+			text += "\n---\n"
+		}
+	}
+
+	result = mcp.NewToolResultText(text)
+	return result, nil
+}
+
+func (s *Server) handleFailureHotspots(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	start := time.Now()
+	args, _ := request.Params.Arguments.(map[string]interface{})
+	var result *mcp.CallToolResult
+	var err error
+
+	defer func() {
+		respText := ""
+		if result != nil && len(result.Content) > 0 {
+			if tc, ok := result.Content[0].(mcp.TextContent); ok {
+				respText = tc.Text
+			}
+		}
+		s.logUsage(ctx, "failure_hotspots", args, respText, err, start)
+	}()
+
+	limit := 10
+	if lim, ok := args["limit"].(float64); ok {
+		limit = int(lim)
+	}
+
+	hotspots, err := s.memorySvc.FailureHotspots(ctx, limit)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	if len(hotspots) == 0 {
+		return mcp.NewToolResultText("No failure hotspots found."), nil
+	}
+
+	text := "## Failure Hotspots\n\n"
+	for _, h := range hotspots {
+		text += fmt.Sprintf("- **%s** (%v unresolved failures)\n", h["repo_id"], h["unresolved_failures"])
+	}
+
+	result = mcp.NewToolResultText(text)
+	return result, nil
+}
+
+func (s *Server) handleMemoryFeedback(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	start := time.Now()
+	args, _ := request.Params.Arguments.(map[string]interface{})
+	var result *mcp.CallToolResult
+	var err error
+
+	defer func() {
+		respText := ""
+		if result != nil && len(result.Content) > 0 {
+			if tc, ok := result.Content[0].(mcp.TextContent); ok {
+				respText = tc.Text
+			}
+		}
+		s.logUsage(ctx, "memory_feedback", args, respText, err, start)
+	}()
+
+	memID, _ := args["memory_id"].(string)
+	useful, _ := args["useful"].(bool)
+	comment, _ := args["comment"].(string)
+
+	err = s.memorySvc.RecordFeedback(ctx, memID, useful, comment)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	result = mcp.NewToolResultText("Feedback recorded successfully.")
+	return result, nil
+}
+
+func (s *Server) handleGetPatternReport(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	start := time.Now()
+	args, _ := request.Params.Arguments.(map[string]interface{})
+	var result *mcp.CallToolResult
+	var err error
+
+	defer func() {
+		respText := ""
+		if result != nil && len(result.Content) > 0 {
+			if tc, ok := result.Content[0].(mcp.TextContent); ok {
+				respText = tc.Text
+			}
+		}
+		s.logUsage(ctx, "get_pattern_report", args, respText, err, start)
+	}()
+
+	path, hasPath := args["path"].(string)
+	var repoID *string
+	if hasPath && path != "" {
+		rid, e := s.memorySvc.ResolveRepo(path)
+		if e != nil {
+			return mcp.NewToolResultError(e.Error()), nil
+		}
+		repoID = &rid
+	}
+
+	report, err := s.memorySvc.GetPatternReport(ctx, repoID)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	// Just format the JSON for MCP
+	importJson := func(v any) string {
+		b, _ := json.MarshalIndent(v, "", "  ")
+		return string(b)
+	}
+
+	text := "## Pattern Report\n\n```json\n"
+	text += importJson(report)
+	text += "\n```"
+
+	result = mcp.NewToolResultText(text)
+	return result, nil
+}
+
+func (s *Server) handleGetRelatedMemories(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	start := time.Now()
+	args, _ := request.Params.Arguments.(map[string]interface{})
+	var result *mcp.CallToolResult
+	var err error
+
+	defer func() {
+		respText := ""
+		if result != nil && len(result.Content) > 0 {
+			if tc, ok := result.Content[0].(mcp.TextContent); ok {
+				respText = tc.Text
+			}
+		}
+		s.logUsage(ctx, "get_related_memories", args, respText, err, start)
+	}()
+
+	memID, _ := args["memory_id"].(string)
+	limit := 5
+	if lim, ok := args["limit"].(float64); ok {
+		limit = int(lim)
+	}
+
+	mems, err := s.memorySvc.GetRelatedMemories(ctx, memID, limit)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	if len(mems) == 0 {
+		return mcp.NewToolResultText("No related memories found."), nil
+	}
+
+	var text string
+	for i, m := range mems {
+		text += fmt.Sprintf("[%0.2f] (%s) [%s] %s\n%s\n", m.Score, m.RepoID, m.Kind, m.CreatedAt, m.Content)
+		if i < len(mems)-1 {
+			text += "\n---\n"
+		}
+	}
+
+	result = mcp.NewToolResultText(text)
+	return result, nil
+}
+
+func (s *Server) handleRecallSessions(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	start := time.Now()
+	args, _ := request.Params.Arguments.(map[string]interface{})
+	var result *mcp.CallToolResult
+	var err error
+
+	defer func() {
+		respText := ""
+		if result != nil && len(result.Content) > 0 {
+			if tc, ok := result.Content[0].(mcp.TextContent); ok {
+				respText = tc.Text
+			}
+		}
+		s.logUsage(ctx, "recall_sessions", args, respText, err, start)
+	}()
+
+	query, _ := args["query"].(string)
+	limit := 10
+	if lim, ok := args["limit"].(float64); ok {
+		limit = int(lim)
+	}
+
+	turns, err := s.sessionSvc.SearchSessions(ctx, query, limit)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	if len(turns) == 0 {
+		result = mcp.NewToolResultText("No matching session transcripts found.")
+		return result, nil
+	}
+
+	var text string
+	for i, t := range turns {
+		text += fmt.Sprintf("### Turn %d (session: %s)\n**User:** %s\n**Agent:** %s\n**Time:** %s\n",
+			t.TurnNumber,
+			truncateStr(t.SessionID, 60),
+			truncateStr(t.UserInput, 200),
+			truncateStr(t.AgentResponse, 400),
+			t.Timestamp.Format("2006-01-02 15:04"),
+		)
+		if i < len(turns)-1 {
+			text += "\n---\n"
+		}
+	}
+
+	result = mcp.NewToolResultText(text)
+	return result, nil
+}
+
+func (s *Server) handleListSessions(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	start := time.Now()
+	args, _ := request.Params.Arguments.(map[string]interface{})
+	var result *mcp.CallToolResult
+	var err error
+
+	defer func() {
+		respText := ""
+		if result != nil && len(result.Content) > 0 {
+			if tc, ok := result.Content[0].(mcp.TextContent); ok {
+				respText = tc.Text
+			}
+		}
+		s.logUsage(ctx, "list_sessions", args, respText, err, start)
+	}()
+
+	limit := 20
+	if lim, ok := args["limit"].(float64); ok {
+		limit = int(lim)
+	}
+
+	// Search with empty query returns recent turns
+	turns, err := s.sessionSvc.SearchSessions(ctx, "*", limit)
+	if err != nil {
+		// FTS might not like bare *, fall back to listing via a broad query
+		turns, err = s.sessionSvc.SearchSessions(ctx, "the OR a OR is OR to OR and", limit)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+	}
+
+	if len(turns) == 0 {
+		result = mcp.NewToolResultText("No indexed sessions found. Sessions from ~/.claude/, ~/.codex/, and ~/.cursor/ are indexed automatically every 5 minutes.")
+		return result, nil
+	}
+
+	// Group by session ID to show unique sessions
+	seen := map[string]bool{}
+	var text string
+	for _, t := range turns {
+		if seen[t.SessionID] {
+			continue
+		}
+		seen[t.SessionID] = true
+		text += fmt.Sprintf("- **%s** (turn %d, %s)\n", truncateStr(t.SessionID, 80), t.TurnNumber, t.Timestamp.Format("2006-01-02 15:04"))
+	}
+
+	result = mcp.NewToolResultText(fmt.Sprintf("## Indexed Sessions (%d unique)\n\n%s", len(seen), text))
+	return result, nil
+}
+
+func truncateStr(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
+}
+
+func (s *Server) handleFindSimilarFailures(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	start := time.Now()
+	args, _ := request.Params.Arguments.(map[string]interface{})
+	var result *mcp.CallToolResult
+	var err error
+
+	defer func() {
+		respText := ""
+		if result != nil && len(result.Content) > 0 {
+			if tc, ok := result.Content[0].(mcp.TextContent); ok {
+				respText = tc.Text
+			}
+		}
+		s.logUsage(ctx, "find_similar_failures", args, respText, err, start)
+	}()
+
+	path, _ := args["path"].(string)
+	limit := 5
+	if lim, ok := args["limit"].(float64); ok {
+		limit = int(lim)
+	}
+
+	repoID, err := s.memorySvc.ResolveRepo(path)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	mems, err := s.memorySvc.FindSimilarFailures(ctx, repoID, limit)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	if len(mems) == 0 {
+		return mcp.NewToolResultText("No similar failures found."), nil
+	}
+
+	var text string
+	for i, m := range mems {
+		text += fmt.Sprintf("[%0.2f] (%s) [%s] %s\n%s\n", m.Score, m.RepoID, m.Kind, m.CreatedAt, m.Content)
+		if i < len(mems)-1 {
+			text += "\n---\n"
+		}
+	}
+
+	result = mcp.NewToolResultText(text)
+	return result, nil
 }

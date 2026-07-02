@@ -27,15 +27,9 @@ func (s *Service) ListInteractions(ctx context.Context, limit int, hostIDE *stri
 }
 
 func (s *Service) ListSessions(ctx context.Context, limit int) ([]core.UsageSession, error) {
-	// Not fully implemented in sqlite layer yet, returning empty for now
-	return []core.UsageSession{}, nil
+	return s.store.ListUsageSessions(ctx, limit)
 }
 
 func (s *Service) Summary(ctx context.Context) (core.UsageSummary, error) {
-	return core.UsageSummary{
-		ByMethod:    []core.CountByName{},
-		ByHostIDE:   []core.CountByName{},
-		ByTransport: []core.CountByName{},
-		RunningIDEs: []core.RunningIDE{},
-	}, nil
+	return s.store.UsageSummary(ctx)
 }

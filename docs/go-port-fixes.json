@@ -1,0 +1,243 @@
+{
+  "project": "agent_memory_mcp",
+  "branch": "feature/goport",
+  "context": "Go port of a Python MCP memory server. The port is ~70% complete. This document lists every issue found during audit, grouped by priority. Fix all items before merge to main.",
+  "repo_structure_hint": "cmd/agent-memory/main.go is entrypoint. internal/mcp/ has MCP server+tools. internal/httpapi/ has REST API. internal/store/sqlite/ has DB layer. internal/sessions/ has session recall system. internal/memory/service.go is the service layer.",
+
+  "blockers": [
+    {
+      "id": "B1",
+      "title": "go.mod declares go 1.26.0 which does not exist",
+      "file": "go.mod",
+      "problem": "go 1.26.0 is not a real Go version. No toolchain can build this module.",
+      "fix": "Change to 'go 1.23' or 'go 1.24' (whatever version you have installed). Run 'go mod tidy' after."
+    },
+    {
+      "id": "B2",
+      "title": "8 MCP tools not registered — agents lose half their capabilities",
+      "file": "internal/mcp/server_tools.go",
+      "problem": "Only 10 of 18 MCP tools are registered. Missing: global_search, get_pattern_report, get_related_memories, find_similar_failures, failure_hotspots, memory_feedback, recall_sessions, list_sessions. The service methods exist but the tools are not wired up.",
+      "fix": "Add tool registrations in server_tools.go for each missing tool. Follow the same pattern as existing tools (define Tool schema + handler). For global_search: call service.GlobalSearch(query, limit). For failure_hotspots: call service.FailureHotspots(limit). For memory_feedback: call service.RecordFeedback(memoryId, useful). For get_pattern_report: call service.GetPatternReport(repoId). For get_related_memories: call service.GetRelatedMemories(memoryId, limit). For find_similar_failures: call service.FindSimilarFailures(repoId, limit). For recall_sessions and list_sessions: see item B3."
+    },
+    {
+      "id": "B3",
+      "title": "Cross-tool session recall not implemented (the key differentiating feature)",
+      "files": [
+        "internal/sessions/parsers/",
+        "internal/sessions/adapters/adapter.go",
+        "internal/sessions/service.go",
+        "internal/sessions/index.go",
+        "internal/mcp/server_tools.go",
+        "internal/httpapi/routes_intelligence.go"
+      ],
+      "problem": "The session subsystem only has a markdown parser. It cannot read Claude Code JSONL (~/.claude/projects/**/*.jsonl) or Codex CLI JSONL (~/.codex/sessions/**/*.jsonl). No search endpoints exist. The recall_sessions and list_sessions MCP tools are missing.",
+      "fix_steps": [
+        {
+          "step": 1,
+          "description": "Create JSONL parser at internal/sessions/parsers/jsonl.go",
+          "details": "Claude Code JSONL format: each line is JSON with 'type' field (user/assistant/summary) and 'message.content' field containing content blocks. Each block has a 'type' (text/thinking/tool_use/tool_result). Normalize blocks to plain text: extract 'text' from text blocks, '[thinking]' prefix for thinking blocks, 'tool_use: <tool_name>(<truncated_input>)' for tool_use, truncated result for tool_result. Truncate tool_result to 600 chars, tool_input to 160 chars. Extract timestamp from 'message.created_at' or fall back to file mtime. Return []SessionTurn."
+        },
+        {
+          "step": 2,
+          "description": "Add Claude Code and Codex adapters in internal/sessions/adapters/adapter.go",
+          "details": "Add two new built-in adapters: claude_code with glob '~/.claude/projects/**/*.jsonl' and format 'jsonl', codex with glob '~/.codex/sessions/**/*.jsonl' and format 'jsonl'. Keep the existing markdown adapter for Cursor. The adapter struct already has Name, SessionGlobs, Format fields — just add entries to the builtins list."
+        },
+        {
+          "step": 3,
+          "description": "Update internal/sessions/index.go to use JSONL parser",
+          "details": "In the indexer's file parsing logic, check the adapter format. If 'jsonl', use the new JSONL parser. If 'markdown', use existing markdown parser. Add mtime-based caching so files are not re-parsed if unchanged."
+        },
+        {
+          "step": 4,
+          "description": "Add recall_sessions and list_sessions MCP tools",
+          "details": "recall_sessions: params are query(string), source(string, optional filter by tool name), limit(int, default 20). Search indexed session turns, return ranked results with source/project/timestamp. list_sessions: params are source(string, optional), limit(int, default 20). Return session metadata — file path, tool name, project, turn count, last modified time."
+        },
+        {
+          "step": 5,
+          "description": "Add HTTP endpoints for sessions",
+          "details": "GET /api/sessions — list discovered sessions. POST /api/sessions/search — search session turns (body: {query, source, limit}). POST /api/sessions/ingest — promote a turn to permanent memory (body: {session_file, turn_index, kind})."
+        }
+      ],
+      "reference_implementation": "See https://github.com/Kuberwastaken/reference — specifically reference_mcp/normalize.py for JSONL parsing logic and reference_mcp/adapters.py for adapter config. Our plan doc is at docs/CROSS_TOOL_SESSION_RECALL.md in this repo."
+    }
+  ],
+
+  "high_severity_bugs": [
+    {
+      "id": "H1",
+      "title": "search_memory score hardcoded to 0.0",
+      "file": "internal/mcp/server.go",
+      "line": "~182",
+      "problem": "The search result formatting uses a hardcoded 0.0 score instead of the actual score from the search result. Every result shows [0.00] to the agent.",
+      "fix": "The search results from the store layer return a score field. Pass it through to the MCP response formatting. Look at how the store's Search() method returns results and extract the score from each hit."
+    },
+    {
+      "id": "H2",
+      "title": "RecordAccess never called during searches",
+      "file": "internal/memory/service.go",
+      "problem": "The service's Search/GlobalSearch methods never call store.RecordAccess() for returned memories. Access tracking is the foundation of relevance scoring — without it, relevance scores never update and noise classification has no data.",
+      "fix": "After Search() returns results, iterate over them and call store.RecordAccess(memoryID, 'search') for each result. Do the same in GlobalSearch() and GetRepoContext()."
+    },
+    {
+      "id": "H3",
+      "title": "Session FTS DELETE runs after rows already deleted",
+      "file": "internal/store/sqlite/sessions.go",
+      "lines": "42-46",
+      "problem": "Line 42 deletes from session_turns table. Lines 45-46 try to delete from session_turns_fts WHERE rowid IN (SELECT rowid FROM session_turns WHERE session_id=?). But the rows are already gone, so the subquery returns nothing. Stale FTS entries accumulate forever causing phantom search results.",
+      "fix": "Swap the order: delete from FTS first (while rows still exist to subquery against), then delete from the main table. Or collect the rowids before deleting, then use them in the FTS delete."
+    }
+  ],
+
+  "medium_severity_bugs": [
+    {
+      "id": "M1",
+      "title": "MemoryServiceFromContext nil panic",
+      "file": "internal/httpapi/auth.go",
+      "line": "~28",
+      "problem": "If auth middleware is bypassed or context key is missing, MemoryServiceFromContext returns nil. Every HTTP handler then panics on nil pointer dereference.",
+      "fix": "Add a nil check. If MemoryServiceFromContext returns nil, respond with 500 Internal Server Error instead of panicking. Or add a middleware that rejects requests without a service in context."
+    },
+    {
+      "id": "M2",
+      "title": "Session turn ID corrupts after 127 turns",
+      "file": "internal/sessions/parsers/markdown.go",
+      "line": "~44",
+      "problem": "Uses string(rune(len(turns))) to generate turn IDs. After 127 turns this produces multi-byte UTF-8 characters. At 0 it produces a null byte.",
+      "fix": "Replace with strconv.Itoa(len(turns)) or fmt.Sprintf('%d', len(turns))."
+    },
+    {
+      "id": "M3",
+      "title": "Custom min() function collides with Go 1.21+ builtin",
+      "file": "internal/mcp/server_tools.go",
+      "line": "~266",
+      "problem": "Go 1.21 added a builtin min(). This custom definition will cause compile error or shadowing warning.",
+      "fix": "Delete the custom min function. Use the builtin min() (if targeting Go 1.21+) or rename to minInt()."
+    },
+    {
+      "id": "M4",
+      "title": "handleExport writes partial response on error",
+      "file": "internal/httpapi/routes_sync.go",
+      "lines": "31-36",
+      "problem": "After writing the first JSONL line (HTTP 200 already sent), if encoder.Encode fails, http.Error is called but cannot change the status code. Client gets corrupt partial JSONL with a 200 status.",
+      "fix": "Buffer the entire response before writing, or log the error and break (since status is already sent). Alternatively, use chunked encoding and just abort the stream."
+    },
+    {
+      "id": "M5",
+      "title": "Watcher ignores all dot-directories",
+      "file": "internal/ingest/watcher/watcher.go",
+      "line": "~148",
+      "problem": "isIgnoredDir skips any directory starting with '.'. This means ~/.claude/ and ~/.codex/ would be skipped, making JSONL session ingestion from those paths impossible.",
+      "fix": "Only ignore specific dot-directories (.git, .svn, node_modules, __pycache__) instead of all dot-prefixed directories. Or make the session indexer bypass the watcher entirely and use its own glob-based file discovery."
+    }
+  ],
+
+  "low_severity_bugs": [
+    {
+      "id": "L1",
+      "title": "FTS and vector search errors silently swallowed",
+      "file": "internal/store/sqlite/search.go",
+      "lines": "108, 148",
+      "problem": "Both FTS and vector query use 'rows, _ := ...' ignoring errors. A broken FTS index returns zero results with no error indication.",
+      "fix": "Handle the error. At minimum log it. Ideally return it so callers know search degraded."
+    },
+    {
+      "id": "L2",
+      "title": "Usage Summary and ListSessions are empty stubs",
+      "file": "internal/usage/service.go",
+      "lines": "30-41",
+      "problem": "These methods return hardcoded empty data and never query the database. The /api/usage/summary endpoint returns nothing useful.",
+      "fix": "Implement actual queries against usage.db. Summary should return total interactions, unique repos, top tools. ListSessions should query usage_sessions table."
+    },
+    {
+      "id": "L3",
+      "title": "Deprecated ioutil usage",
+      "file": "internal/store/sqlite/migration.go",
+      "problem": "Uses ioutil.ReadFile, ioutil.ReadDir, ioutil.WriteFile — deprecated since Go 1.16.",
+      "fix": "Replace with os.ReadFile, os.ReadDir, os.WriteFile."
+    },
+    {
+      "id": "L4",
+      "title": "GetRelatedMemories is a stub",
+      "file": "internal/store/sqlite/intelligence.go",
+      "problem": "GetRelatedMemories just calls ListMemories — it does not actually find related memories by content similarity.",
+      "fix": "Implement actual related memory finding: take the source memory's content, run a search query with it, exclude the source memory from results."
+    },
+    {
+      "id": "L5",
+      "title": "GetPatternReport returns hardcoded data",
+      "file": "internal/store/sqlite/intelligence.go",
+      "problem": "Returns a hardcoded dictionary instead of computing real patterns from the database.",
+      "fix": "Query failure_signatures grouped by signature, count occurrences, compute health score based on resolved vs unresolved ratio. The Python version in patterns/detector.py has the logic."
+    },
+    {
+      "id": "L6",
+      "title": "FailureHotspots missing repo path lookup",
+      "file": "internal/store/sqlite/intelligence.go",
+      "problem": "Returns '/placeholder' for repo paths instead of actual paths from repos table.",
+      "fix": "JOIN with repos table or look up repo path after querying failure counts."
+    },
+    {
+      "id": "L7",
+      "title": "handleWatcherStart and handleWatcherStop are no-ops",
+      "file": "internal/httpapi/routes_memory.go",
+      "lines": "166-172",
+      "problem": "Return hardcoded JSON without actually starting or stopping the watcher.",
+      "fix": "Wire up to the actual watcher service. Call watcher.Start(path) and watcher.Stop()."
+    },
+    {
+      "id": "L8",
+      "title": "Embeddings are 64-dim hash vectors, not real 384-dim",
+      "file": "internal/store/sqlite/search.go",
+      "problem": "Uses a naive bag-of-words hash vector (64 dimensions) instead of real sentence-transformer embeddings (384 dimensions). Search quality is significantly lower than the Python version.",
+      "fix": "This is a known limitation for the Go port. Options: (a) call an embedding API (OpenAI/local), (b) use ONNX runtime to run all-MiniLM-L6-v2 locally, (c) accept the tradeoff for now and document it. Recommend option (c) for initial release, (a) as a fast follow."
+    }
+  ],
+
+  "missing_features_not_blocking_merge": [
+    {
+      "id": "F1",
+      "title": "WebSocket events not implemented",
+      "problem": "The routes_ws.go file exists and registers /ws/events but the actual WebSocket upgrade and event broadcasting is not fully wired. The Python version streams real-time events to the dashboard.",
+      "note": "Not a merge blocker if the dashboard works without live updates. Can be added post-merge."
+    },
+    {
+      "id": "F2",
+      "title": "No TOML config for custom session sources",
+      "problem": "The plan called for ~/.agent-memory/session_sources.toml to let users add custom tool adapters (e.g. Windsurf). Currently only hardcoded adapters exist.",
+      "note": "Nice-to-have. Add after core session recall works."
+    }
+  ],
+
+  "verification_checklist": [
+    "go mod tidy succeeds with a real Go version",
+    "go build ./cmd/agent-memory succeeds",
+    "go test ./... passes",
+    "Start server, open http://localhost:9000 — dashboard loads with stats",
+    "Connect via MCP — verify all 18 tools are listed",
+    "Call remember tool — memory is stored",
+    "Call search_memory — results have non-zero scores",
+    "Call recall_sessions — returns results from ~/.claude/ if sessions exist",
+    "Call list_sessions — lists discovered session files",
+    "Call memory_feedback — feedback is recorded",
+    "Call global_search via MCP — returns cross-repo results",
+    "Check /api/usage/summary returns real data",
+    "Create 130+ turn session — verify turn IDs don't corrupt"
+  ],
+
+  "priority_order": [
+    "B1 — fix go.mod version (1 minute)",
+    "M3 — remove custom min() (1 minute)",
+    "L3 — replace ioutil (2 minutes)",
+    "H1 — fix search score (10 minutes)",
+    "H2 — wire RecordAccess into searches (15 minutes)",
+    "H3 — fix session FTS delete order (5 minutes)",
+    "M1 — nil guard on MemoryServiceFromContext (5 minutes)",
+    "M2 — fix turn ID generation (2 minutes)",
+    "B2 — register 6 missing MCP tools (45 minutes)",
+    "L1 — handle search errors (10 minutes)",
+    "L4-L7 — fix stubs (30 minutes)",
+    "M4-M5 — export and watcher fixes (15 minutes)",
+    "B3 — implement session recall with JSONL parsers (3 hours)",
+    "L2 — implement usage queries (20 minutes)"
+  ]
+}

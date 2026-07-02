@@ -22,6 +22,7 @@ func (s *Store) GetRepoContext(ctx context.Context, repoID string) (core.RepoCon
 		}
 		var parts []string
 		for _, m := range mems {
+			s.RecordAccess(ctx, m.ID, "context", "", "", "")
 			c := m.Content
 			if len(c) > 500 {
 				c = c[:500] + "..."

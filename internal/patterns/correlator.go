@@ -143,3 +143,53 @@ func extractFileRefs(text string) []string {
 	}
 	return refs
 }
+
+// FindSimilarFailures finds failures in other repositories similar to failures in the given repo.
+func (c *Correlator) FindSimilarFailures(ctx context.Context, repoID string, limit int) ([]core.Memory, error) {
+	// 1. Get recent failures in this repo
+	var failures []core.Memory
+	mems, err := c.store.ListMemories(ctx, &repoID, nil, 100)
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range mems {
+		if m.Kind == "failure" {
+			failures = append(failures, m)
+		}
+	}
+	if len(failures) == 0 {
+		return []core.Memory{}, nil
+	}
+
+	// 2. Build a combined query text from recent failures
+	var queryText string
+	for i, m := range failures {
+		if i >= 5 {
+			break
+		}
+		queryText += m.Content + " "
+	}
+	if len(queryText) > 500 {
+		queryText = queryText[:500]
+	}
+
+	// 3. Search for failures globally (repoID=nil) using this combined text
+	kinds := []string{"failure"}
+	similar, err := c.store.Search(ctx, queryText, nil, kinds, limit*2)
+	if err != nil {
+		return nil, err
+	}
+
+	// 4. Filter out failures from the same repo
+	var result []core.Memory
+	for _, m := range similar {
+		if m.RepoID != repoID {
+			result = append(result, m)
+			if len(result) >= limit {
+				break
+			}
+		}
+	}
+
+	return result, nil
+}

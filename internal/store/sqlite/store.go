@@ -106,6 +106,37 @@ func (s *Store) InsertMemory(ctx context.Context, repoID, kind, content, source 
 	return memID, true, nil
 }
 
+// ImportMemory bulk-inserts an existing memory without modifying its ID or timestamps.
+func (s *Store) ImportMemory(ctx context.Context, m core.Memory) error {
+	metaJSON, _ := json.Marshal(m.Metadata)
+	
+	// If created_at is missing, use now
+	createdAt := m.CreatedAt
+	if createdAt == "" {
+		createdAt = time.Now().UTC().Format(time.RFC3339)
+	}
+
+	_, err := s.memoryDB.ExecContext(ctx, `
+		INSERT OR IGNORE INTO memories (id, repo_id, kind, content, source, metadata_json, created_at, session_id, summary)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, m.ID, m.RepoID, m.Kind, m.Content, m.Source, string(metaJSON), createdAt, m.SessionID, m.Summary)
+	if err != nil {
+		return err
+	}
+
+	var rowid int64
+	err = s.memoryDB.QueryRowContext(ctx, "SELECT rowid FROM memories WHERE id = ?", m.ID).Scan(&rowid)
+	if err == nil {
+		s.memoryDB.ExecContext(ctx, "INSERT OR IGNORE INTO memories_fts(rowid, content, kind, repo_id) VALUES (?, ?, ?, ?)", rowid, m.Content, m.Kind, m.RepoID)
+	}
+
+	emb := s.embed(m.Content)
+	embJSON, _ := json.Marshal(emb)
+	s.memoryDB.ExecContext(ctx, "INSERT OR IGNORE INTO memory_embeddings (memory_id, embedding_json) VALUES (?, ?)", m.ID, string(embJSON))
+	
+	return nil
+}
+
 func (s *Store) ListMemories(ctx context.Context, repoID *string, kind *string, limit int) ([]core.Memory, error) {
 	query := "SELECT id, repo_id, kind, content, source, metadata_json, session_id, summary, created_at, access_count, last_accessed, relevance_score, quality_tier FROM memories WHERE deleted = 0"
 	var args []any

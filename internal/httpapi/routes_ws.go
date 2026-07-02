@@ -32,6 +32,10 @@ func (s *Server) handleWsEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	tenantID := TenantFromContext(r.Context())
+	s.hub.AddClient(tenantID, conn)
+	defer s.hub.RemoveClient(tenantID, conn)
+
 	// Minimal mock loop to keep connection alive
 	for {
 		_, _, err := conn.ReadMessage()

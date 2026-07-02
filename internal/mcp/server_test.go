@@ -64,6 +64,15 @@ func (m *mockMemoryService) RecordFeedback(ctx context.Context, memoryID string,
 func (m *mockMemoryService) SmartContext(ctx context.Context, repoID, task string, maxTokens int) (core.SmartContext, error) {
 	return core.SmartContext{}, nil
 }
+func (m *mockMemoryService) FindSimilarFailures(ctx context.Context, repoID string, limit int) ([]core.Memory, error) {
+	return nil, nil
+}
+func (m *mockMemoryService) Export(ctx context.Context, repoID *string) ([]core.Memory, error) {
+	return nil, nil
+}
+func (m *mockMemoryService) Import(ctx context.Context, memories []core.Memory) (int, error) {
+	return 0, nil
+}
 
 type mockUsageService struct {}
 func (m *mockUsageService) Record(ctx context.Context, transport, method string, query map[string]any, responsePreview, clientName, clientVersion, hostIDE string, durationMS float64, ok bool) error {

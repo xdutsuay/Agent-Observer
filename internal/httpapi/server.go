@@ -6,55 +6,72 @@ import (
 	"path/filepath"
 
 	"agent-memory-mcp/internal/app"
+	"agent-memory-mcp/internal/config"
+	"agent-memory-mcp/internal/tenant"
 )
 
 type Server struct {
-	memoryService app.MemoryService
-	usageService  app.UsageService
+	tenantManager tenant.Provider
+	config        config.Config
+	hub           *Hub
 }
 
-func NewServer(ms app.MemoryService, us app.UsageService) *Server {
+func NewServer(tm tenant.Provider, cfg config.Config) *Server {
 	return &Server{
-		memoryService: ms,
-		usageService:  us,
+		tenantManager: tm,
+		config:        cfg,
+		hub:           NewHub(),
 	}
 }
 
-func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
+// getServices extracts the tenant ID from the context and returns the appropriate services
+func (s *Server) getServices(r *http.Request) (app.MemoryService, app.UsageService, error) {
+	tenantID := TenantFromContext(r.Context())
+	ts, err := s.tenantManager.Get(tenantID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return ts.MemoryService, ts.UsageService, nil
+}
 
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+func (s *Server) Handler() http.Handler {
+	apiMux := http.NewServeMux()
+	s.registerMemoryRoutes(apiMux)
+	s.registerIntelligenceRoutes(apiMux)
+	s.registerTelemetryRoutes(apiMux)
+	s.registerWsRoutes(apiMux)
+	s.registerSyncRoutes(apiMux)
+
+	mainMux := http.NewServeMux()
+	mainMux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, map[string]string{"status": "ok"})
 	})
 
-	s.registerMemoryRoutes(mux)
-	s.registerIntelligenceRoutes(mux)
-	s.registerTelemetryRoutes(mux)
-	s.registerWsRoutes(mux)
+	// Wrap API mux with auth middleware and service requirement
+	authAPI := s.authMiddleware(requireServiceMiddleware(apiMux))
 
 	// Fallback for static UI
 	distDir := "ui/dist"
 	fileServer := http.FileServer(http.Dir(distDir))
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Don't catch /api/ routes — they should 404 properly
-		if len(r.URL.Path) > 4 && r.URL.Path[:5] == "/api/" {
-			http.NotFound(w, r)
+	
+	mainMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Route /api/ and /ws/ to the authenticated apiMux
+		if (len(r.URL.Path) > 4 && r.URL.Path[:5] == "/api/") || (len(r.URL.Path) > 3 && r.URL.Path[:4] == "/ws/") {
+			authAPI.ServeHTTP(w, r)
 			return
 		}
 
 		path := filepath.Join(distDir, r.URL.Path)
-
 		info, err := os.Stat(path)
 		if os.IsNotExist(err) || (err == nil && info.IsDir()) {
 			http.ServeFile(w, r, filepath.Join(distDir, "index.html"))
 			return
 		}
-
 		fileServer.ServeHTTP(w, r)
 	})
 
 	// Wrap with CORS
-	return corsMiddleware(mux)
+	return corsMiddleware(mainMux)
 }
 
 func corsMiddleware(next http.Handler) http.Handler {

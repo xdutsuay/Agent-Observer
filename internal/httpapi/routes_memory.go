@@ -20,7 +20,7 @@ func (s *Server) registerMemoryRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
-	repos, err := s.memoryService.ListRepos(r.Context())
+	repos, err := MemoryServiceFromContext(r.Context()).ListRepos(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -29,7 +29,7 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListRepos(w http.ResponseWriter, r *http.Request) {
-	repos, err := s.memoryService.ListRepos(r.Context())
+	repos, err := MemoryServiceFromContext(r.Context()).ListRepos(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -39,7 +39,7 @@ func (s *Server) handleListRepos(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 	repoID := r.PathValue("repo_id")
-	ctx, err := s.memoryService.GetRepoContext(r.Context(), repoID)
+	ctx, err := MemoryServiceFromContext(r.Context()).GetRepoContext(r.Context(), repoID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -49,7 +49,7 @@ func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetRepoMemory(w http.ResponseWriter, r *http.Request) {
 	repoID := r.PathValue("repo_id")
-	memories, err := s.memoryService.ListMemories(r.Context(), &repoID, nil, 100)
+	memories, err := MemoryServiceFromContext(r.Context()).ListMemories(r.Context(), &repoID, nil, 100)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -69,7 +69,7 @@ func (s *Server) handleAddMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	memID, isNew, err := s.memoryService.Remember(repoID, kind, req.Content, "http", nil)
+	memID, isNew, err := MemoryServiceFromContext(r.Context()).Remember(repoID, kind, req.Content, "http", nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -91,7 +91,7 @@ func (s *Server) handleListMemories(w http.ResponseWriter, r *http.Request) {
 		kID = &kind
 	}
 
-	memories, err := s.memoryService.ListMemories(r.Context(), rID, kID, 100)
+	memories, err := MemoryServiceFromContext(r.Context()).ListMemories(r.Context(), rID, kID, 100)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -120,7 +120,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		limit = 10
 	}
 
-	mems, err := s.memoryService.Search(r.Context(), req.Query, rID, req.Kinds, limit)
+	mems, err := MemoryServiceFromContext(r.Context()).Search(r.Context(), req.Query, rID, req.Kinds, limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -144,7 +144,7 @@ func (s *Server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 		limit = 20
 	}
 
-	mems, err := s.memoryService.GlobalSearch(r.Context(), req.Query, req.Kinds, limit)
+	mems, err := MemoryServiceFromContext(r.Context()).GlobalSearch(r.Context(), req.Query, req.Kinds, limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -154,7 +154,7 @@ func (s *Server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleFailureSignatures(w http.ResponseWriter, r *http.Request) {
 	repoID := r.PathValue("repo_id")
-	report, err := s.memoryService.GetPatternReport(r.Context(), &repoID)
+	report, err := MemoryServiceFromContext(r.Context()).GetPatternReport(r.Context(), &repoID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -164,10 +164,34 @@ func (s *Server) handleFailureSignatures(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleWatcherStart(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RepoID string `json:"repo_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	err := WatcherServiceFromContext(r.Context()).Start(r.Context(), req.RepoID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	respondJSON(w, map[string]string{"status": "started"})
 }
 
 func (s *Server) handleWatcherStop(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RepoID string `json:"repo_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	err := WatcherServiceFromContext(r.Context()).Stop(r.Context(), req.RepoID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	respondJSON(w, map[string]string{"status": "stopped"})
 }
 

@@ -14,10 +14,13 @@ func (s *Server) registerIntelligenceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/context/generate", s.handleContextGenerate)
 	mux.HandleFunc("POST /api/v1/feedback", s.handleFeedback)
 	mux.HandleFunc("POST /api/v1/relevance/refresh", s.handleRelevanceRefresh)
+	// Session recall endpoints
+	mux.HandleFunc("POST /api/sessions/search", s.handleSessionSearch)
+	mux.HandleFunc("POST /api/sessions/ingest", s.handleSessionIngest)
 }
 
 func (s *Server) handleGetPatterns(w http.ResponseWriter, r *http.Request) {
-	report, err := s.memoryService.GetPatternReport(r.Context(), nil)
+	report, err := MemoryServiceFromContext(r.Context()).GetPatternReport(r.Context(), nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -27,7 +30,7 @@ func (s *Server) handleGetPatterns(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetPatternsRepo(w http.ResponseWriter, r *http.Request) {
 	repoID := r.PathValue("repo_id")
-	report, err := s.memoryService.GetPatternReport(r.Context(), &repoID)
+	report, err := MemoryServiceFromContext(r.Context()).GetPatternReport(r.Context(), &repoID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -36,7 +39,7 @@ func (s *Server) handleGetPatternsRepo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetHotspots(w http.ResponseWriter, r *http.Request) {
-	hotspots, err := s.memoryService.FailureHotspots(r.Context(), 10)
+	hotspots, err := MemoryServiceFromContext(r.Context()).FailureHotspots(r.Context(), 10)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -46,7 +49,7 @@ func (s *Server) handleGetHotspots(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetRelated(w http.ResponseWriter, r *http.Request) {
 	memID := r.PathValue("memory_id")
-	mems, err := s.memoryService.GetRelatedMemories(r.Context(), memID, 5)
+	mems, err := MemoryServiceFromContext(r.Context()).GetRelatedMemories(r.Context(), memID, 5)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -70,7 +73,7 @@ func (s *Server) handleSmartContext(w http.ResponseWriter, r *http.Request) {
 		maxTokens = 4000
 	}
 
-	ctx, err := s.memoryService.SmartContext(r.Context(), req.RepoID, req.Task, maxTokens)
+	ctx, err := MemoryServiceFromContext(r.Context()).SmartContext(r.Context(), req.RepoID, req.Task, maxTokens)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -88,7 +91,7 @@ func (s *Server) handleContextGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := s.memoryService.GenerateContextFile(r.Context(), req.RepoID, req.ProjectPath)
+	err := MemoryServiceFromContext(r.Context()).GenerateContextFile(r.Context(), req.RepoID, req.ProjectPath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -107,7 +110,7 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := s.memoryService.RecordFeedback(r.Context(), req.MemoryID, req.Useful, req.Context)
+	err := MemoryServiceFromContext(r.Context()).RecordFeedback(r.Context(), req.MemoryID, req.Useful, req.Context)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -122,10 +125,64 @@ func (s *Server) handleRelevanceRefresh(w http.ResponseWriter, r *http.Request) 
 	// Decode is optional since body might be empty
 	json.NewDecoder(r.Body).Decode(&req)
 
-	updated, demoted, err := s.memoryService.RefreshRelevance(r.Context(), req.RepoID)
+	updated, demoted, err := MemoryServiceFromContext(r.Context()).RefreshRelevance(r.Context(), req.RepoID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	respondJSON(w, map[string]any{"updated": updated, "demoted": demoted})
+}
+
+func (s *Server) handleSessionSearch(w http.ResponseWriter, r *http.Request) {
+	ss := SessionServiceFromContext(r.Context())
+	if ss == nil {
+		http.Error(w, "Session service not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		Query string `json:"query"`
+		Limit int    `json:"limit"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if req.Limit == 0 {
+		req.Limit = 20
+	}
+
+	turns, err := ss.SearchSessions(r.Context(), req.Query, req.Limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	respondJSON(w, map[string]any{"results": turns})
+}
+
+func (s *Server) handleSessionIngest(w http.ResponseWriter, r *http.Request) {
+	ms := MemoryServiceFromContext(r.Context())
+	if ms == nil {
+		http.Error(w, "Memory service not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		RepoID  string `json:"repo_id"`
+		TurnID  string `json:"turn_id"`
+		Kind    string `json:"kind"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	meta := map[string]any{"promoted_from_turn": req.TurnID}
+	id, _, err := ms.Remember(req.RepoID, req.Kind, req.Content, "session_promotion", meta)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	respondJSON(w, map[string]any{"id": id, "status": "promoted"})
 }

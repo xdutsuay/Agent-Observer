@@ -16,7 +16,7 @@ func (s *Server) registerTelemetryRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	repos, _ := s.memoryService.ListRepos(r.Context())
+	repos, _ := MemoryServiceFromContext(r.Context()).ListRepos(r.Context())
 	repoCount := 0
 	if repos != nil {
 		repoCount = len(repos)
@@ -71,7 +71,7 @@ func (s *Server) handleDiskUsage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUsageSummary(w http.ResponseWriter, r *http.Request) {
-	summary, err := s.usageService.Summary(r.Context())
+	summary, err := UsageServiceFromContext(r.Context()).Summary(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -88,7 +88,7 @@ func (s *Server) handleUsageSessions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	
-	sessions, err := s.usageService.ListSessions(r.Context(), limit)
+	sessions, err := UsageServiceFromContext(r.Context()).ListSessions(r.Context(), limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -111,7 +111,7 @@ func (s *Server) handleUsageInteractions(w http.ResponseWriter, r *http.Request)
 		hostIDEPtr = &hostIDE
 	}
 	
-	interactions, err := s.usageService.ListInteractions(r.Context(), limit, hostIDEPtr)
+	interactions, err := UsageServiceFromContext(r.Context()).ListInteractions(r.Context(), limit, hostIDEPtr)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

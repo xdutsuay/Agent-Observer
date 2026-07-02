@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"agent-memory-mcp/internal/core"
+	"agent-memory-mcp/internal/tenant"
+	"agent-memory-mcp/internal/config"
 )
 
 type mockMemoryService struct {}
@@ -66,6 +68,13 @@ func (m *mockMemoryService) RecordFeedback(ctx context.Context, memoryID string,
 	return nil
 }
 
+func (m *mockMemoryService) Export(ctx context.Context, repoID *string) ([]core.Memory, error) {
+	return nil, nil
+}
+func (m *mockMemoryService) Import(ctx context.Context, memories []core.Memory) (int, error) {
+	return 0, nil
+}
+
 type mockUsageService struct {}
 
 func (m *mockUsageService) Record(ctx context.Context, transport, method string, query map[string]any, responsePreview, clientName, clientVersion, hostIDE string, durationMS float64, ok bool) error {
@@ -81,9 +90,16 @@ func (m *mockUsageService) Summary(ctx context.Context) (core.UsageSummary, erro
 	return core.UsageSummary{}, nil
 }
 
+type mockTenantProvider struct {}
+func (m *mockTenantProvider) Get(tenantID string) (*tenant.TenantServices, error) {
+	return &tenant.TenantServices{
+		MemoryService: &mockMemoryService{},
+		UsageService:  &mockUsageService{},
+	}, nil
+}
 
 func TestHealthRoute(t *testing.T) {
-	srv := NewServer(&mockMemoryService{}, &mockUsageService{})
+	srv := NewServer(&mockTenantProvider{}, config.Config{})
 	h := srv.Handler()
 
 	req := httptest.NewRequest("GET", "/health", nil)
@@ -103,7 +119,7 @@ func TestHealthRoute(t *testing.T) {
 }
 
 func TestListProjectsRoute(t *testing.T) {
-	srv := NewServer(&mockMemoryService{}, &mockUsageService{})
+	srv := NewServer(&mockTenantProvider{}, config.Config{})
 	h := srv.Handler()
 
 	req := httptest.NewRequest("GET", "/api/projects", nil)

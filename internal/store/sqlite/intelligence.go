@@ -37,11 +37,12 @@ func (s *Store) GetPatternReport(ctx context.Context, repoID *string) (map[strin
 
 func (s *Store) FailureHotspots(ctx context.Context, limit int) ([]map[string]any, error) {
 	rows, err := s.memoryDB.QueryContext(ctx, `
-		SELECT repo_id, SUM(count) as unresolved 
-		FROM failure_signatures 
-		WHERE resolved = 0 
-		GROUP BY repo_id 
-		ORDER BY unresolved DESC 
+		SELECT f.repo_id, SUM(f.count) as unresolved, COALESCE(r.path, '') as path
+		FROM failure_signatures f
+		LEFT JOIN repos r ON r.id = f.repo_id
+		WHERE f.resolved = 0
+		GROUP BY f.repo_id
+		ORDER BY unresolved DESC
 		LIMIT ?
 	`, limit)
 	if err != nil {
@@ -51,13 +52,13 @@ func (s *Store) FailureHotspots(ctx context.Context, limit int) ([]map[string]an
 
 	var hotspots []map[string]any
 	for rows.Next() {
-		var repoID string
+		var repoID, path string
 		var count int
-		if err := rows.Scan(&repoID, &count); err == nil {
+		if err := rows.Scan(&repoID, &count, &path); err == nil {
 			hotspots = append(hotspots, map[string]any{
-				"repo_id": repoID,
+				"repo_id":             repoID,
 				"unresolved_failures": count,
-				"path": "/placeholder", // could fetch from repos table
+				"path":                path,
 			})
 		}
 	}

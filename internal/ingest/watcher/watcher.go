@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -143,9 +142,6 @@ func isIgnoredDir(path string) bool {
 	switch base {
 	case ".git", "node_modules", "vendor", ".venv", "__pycache__", ".agent-memory", ".cursor", ".vscode":
 		return true
-	}
-	if strings.HasPrefix(base, ".") && base != "." && base != ".." {
-		return true // Ignore all hidden directories generally
 	}
 	return false
 }

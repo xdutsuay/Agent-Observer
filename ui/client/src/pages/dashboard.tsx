@@ -116,7 +116,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     setChartData((prev) => {
-      const newData = [...prev, { time: Date.now() / 1000, val: metrics.fs_events_per_sec * 10 }];
+      const newData = [...prev, { time: Date.now() / 1000, val: (metrics.fs_events_per_sec || 0) * 10 }];
       return newData.slice(-40);
     });
   }, [metrics.fs_events_per_sec]);
@@ -182,7 +182,7 @@ export default function Dashboard() {
           <StatCard icon={FolderOpen} label="PROJECTS" value={projects.length} color="text-primary" />
           <StatCard icon={Box} label="MEMORIES" value={patterns?.activity_trends?.total ?? 0} color="text-blue-400" />
           <StatCard icon={AlertTriangle} label="FAILURES" value={hotspots.reduce((s, h) => s + h.unresolved_failures, 0)} color="text-orange-400" />
-          <StatCard icon={Activity} label="EVENTS/SEC" value={Math.round(metrics.fs_events_per_sec)} color="text-green-400" />
+          <StatCard icon={Activity} label="EVENTS/SEC" value={Math.round(metrics.fs_events_per_sec || 0)} color="text-green-400" />
           <StatCard icon={Sparkles} label="RELEVANCE" value={`${refreshMutation.data?.refreshed ?? "—"}`} color="text-yellow-400" subtitle={refreshMutation.data ? `${refreshMutation.data.noise_classified} noise` : undefined} />
         </div>
 

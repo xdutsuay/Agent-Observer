@@ -38,11 +38,11 @@ func (s *Store) UpdateIndexState(ctx context.Context, filePath string, mtime tim
 	}
 
 	// Delete old turns for this session (filePath is used as session_id for file-based logs)
-	_, err = tx.ExecContext(ctx, "DELETE FROM session_turns WHERE session_id = ?", filePath)
+	_, err = tx.ExecContext(ctx, "DELETE FROM session_turns_fts WHERE rowid IN (SELECT rowid FROM session_turns WHERE session_id = ?)", filePath)
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, "DELETE FROM session_turns_fts WHERE rowid IN (SELECT rowid FROM session_turns WHERE session_id = ?)", filePath)
+	_, err = tx.ExecContext(ctx, "DELETE FROM session_turns WHERE session_id = ?", filePath)
 	if err != nil {
 		return err
 	}
