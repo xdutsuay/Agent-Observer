@@ -34,3 +34,4 @@ test_error.log
 *.egg-info/
 graphify-out/
 .pytest_cache/
+agent-memory
